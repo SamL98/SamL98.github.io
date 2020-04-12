@@ -9,48 +9,38 @@ In this post, I'll be explaining how I created this collage of album art:
 
 ![collage](/images/collage.png)
 
-## Getting the Data
+## Getting the Album Art
 
-As with any machine learning task, we need a good source of data. The data for this task would be my unfiltered Spotify listening history. That's great. Spotify even has an [API endpoint] for it. There only problem is you can only get the past 50 listened to songs.
+As you might expect, I used the Spotify API to download the album art. I won't go through the code for this but if you know how to interact with an API, it's super straightforward. For this collage, I chose to use the album covers for the 100 songs in my "Top Songs of 2019" + the 100 songs I most recently added to my library.
 
-This is not good. 50 is way too low to a number to base our algorithm on. We need on the order of thousands, maybe even tens of thousands of songs if we want a shot at this.
+## Decomposing the Image Set
 
-I came up with a solution to this. It's not the best but with some patience, it just might work.
+Now we'll want to perform PCA on all of the flattened images. For those who don't know, PCA is a method of projecting a dataset onto its "principal components". Here, principal components are defined as the axes in which the data varies the most. If we then choose to represent the data only using some of these principal components, then we have a more compact representation of how the data varies to use for comparing how similar two vectors in the space are. Here's a link to the [Wikipedia](https://en.wikipedia.org/wiki/Principal_component_analysis) if you want to learn the math behind it.
 
-## Setting up the Cron Job
+In our case, each vector in the space is an image. Therefore, when performing PCA, we will first be analyzing which pixels change the most across all the images. Then we will be using these pixels as a smaller vector representation of the image to use for fast comparison. This is a fairly naive approach since images change rapidly on a per-pixel basis. However, looking at the collage produced, it seems to work well enough (you can be the judge of that!). I would suspect that since many album covers (at least the ones in my library) are composed of a central object surrounded by a solid color, picking pixels from the background captures the varying color across images.
 
-Since we can only get the most recent 50 songs, why not just repeatedly poll the API to increase our dataset size? While far from ideal, this will work fine. But now another problem arises: I'll never remember to consistently poll the API. However, no fear! Cron saves the day!
+## The Code
 
-If we set up a cron job to run at specified intervals, we will never have to remember to poll the API and our treasure trove of listening history will keep growing; all we have to do is listen!
+Without further ado, let's go over the code for this.
 
-I've put the python script I use for this into a [gist] for anyone to take a look at. One thing to note is the use of the `sputil` module. This is a module I wrote a long time ago to deal with the Spotify API and OAuth. I've created a [sputil gist] if you want to take a look. I may publish to full module in the future but right now it is full of hacky, year-old code.
+First, we'll load all of the images into a 2D array:
 
-Now all we have to do run this script as a cron job:
+```python
+import os
+from os.path import join
+import numpy as np
+from skimage.io import imread
+from skimage.transform import resize
 
-```bash
-script_path=<redacted>
-python_path=/Library/Frameworks/Python.framework/Versions/3.6/bin/python3
-PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
+TILE_SIZE = 128
+IMAGE_DIR = 'images'
 
-0 8 * * * cd $script_path && $python_path get_recents.py >> $script_path/cron_log.log
-0 12 * * * cd $script_path && $python_path get_recents.py >> $script_path/cron_log.log
-0 16 * * * cd $script_path && $python_path get_recents.py >> $script_path/cron_log.log
-0 20 * * * cd $script_path && $python_path get_recents.py >> $script_path/cron_log.log
-0 23 * * * cd $script_path && $python_path get_recents.py >> $script_path/cron_log.log
-``` 
+tiles = []
 
-This job is set to run at 4 hour intervals every day, starting at 8:00 am. I'm not sure if the changes to `PATH` are still needed but I remember I had a lot of trouble getting this job to actually run and I believe that fixed it.
+for i, f in enumerate(os.listdir(IMAGE_DIR)):
+    tile = imread(join(img_dir, f))
+    tile = (255 * imresize(tile, (TILE_SIZE, TILE_SIZE))).astype(np.uint8).ravel()
+    tiles.append(tile)
 
-I first created this job last May, ran it for a little, gathered a hundred songs, and then something broke and this project went to the backburner. A few weeks ago I dug this project up from the graveyard, started running this job again, and now I have a little over 2500 songs in `recently_played.csv`. Not quite as much as I'd like, but it's a start.
-
-## Creating the Graph
-
-Now that we have a decent dataset of songs, we need a way to create a graph of similar songs if we are going to perform graph clustering (duh!). To do this, we will first need to split the listening history into sessions.
-
-*What is a session?* A session is a string of songs in our history file that were listened to in the same sitting. 
-
-Since our history file is just one long DataFrame, there could be adjacent songs where I stopped listening and a day later, in a completely different mood, I started listening to something else. If these were included, we would get some garbage edges in our graph so it's best and relatively simple to throw them out.
-
-[API endpoint]: https://developer.spotify.com/documentation/web-api/reference/player/get-recently-played/
-[gist]: https://gist.github.com/SamL98/c1200a30cdb19103138308f72de8d198
-[sputil gist]: https://gist.github.com/SamL98/ff1448aa1f92bf671a549357449192e5
+tiles = np.array(tiles)
+```
