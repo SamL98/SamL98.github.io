@@ -37,10 +37,44 @@ IMAGE_DIR = 'images'
 
 tiles = []
 
-for i, f in enumerate(os.listdir(IMAGE_DIR)):
-    tile = imread(join(img_dir, f))
-    tile = (255 * imresize(tile, (TILE_SIZE, TILE_SIZE))).astype(np.uint8).ravel()
+for fname in os.listdir(IMAGE_DIR):
+    tile = imread(join(img_dir, fname))
+    tile = imresize(tile, (TILE_SIZE, TILE_SIZE)) # resize all the images to a uniform size
+    tile = (255 * tile).astype(np.uint8).ravel()  # convert the image type back to bytes and flatten it
     tiles.append(tile)
 
 tiles = np.array(tiles)
 ```
+
+Now, we'll perform PCA on the dataset. For the collage at the beginning of the article, I used 10 components:
+
+```python
+from sklearn.decomposition import PCA
+
+NUM_COMP = 10
+pca = PCA(NUM_COMP)
+
+tiles_pca = pca.fit_transform(tiles)
+pairwise_similarity = tiles_pca.dot(tiles_pca.T)
+
+# Ignore self-similarity
+n_tiles = len(tiles)
+pairwise_similarity[np.arange(n_tiles), np.arange(n_tiles)] = 0
+```
+
+Here, we're using a nice vectorized trick to compute the pairwise similarity. `tiles_pca` will have shape `(n_tiles, NUM_COMP)` where each row is the PCA-projected vector for each image. Therefore, `tiles_pca` will have shape `(NUM_COMP, n_tiles)` and each column will have the vector for each image.
+
+If we then multiply these two matrices together, each element in the result will be computed as:
+```
+(im1_comp1 im1_comp2 ... im1_comp10) * (im2_comp1    = (im1_comp1 * im2_comp1 + im1_comp2 * im2_comp2 + ... + im1_comp10 * im2_comp10)
+                                        im2_comp2
+                                        ...
+                                        img2_comp10)
+```
+or the dot product between each image vector. This is equivalent to the unnormalized cosine similarity. So the metric will be biased towards image vector pairs with a large magnitude. Therefire, this metric should make the math nerds cringe but we don't care because it's functionally OK.
+
+As a final step, we zero out the diagonal of the `pairwise_similarity` matrix. This is because the diagonal corresponds to the similarity between an image and itself. This will obviously be the highest of all similarities for this image, so we want to ignore it as to not make our collage look blocky.
+
+## Arranging the Tiles
+
+Now that we have a pseudo-pairwise similarity between each tile, we need to use this to construct a collage with a nice color gradient.
