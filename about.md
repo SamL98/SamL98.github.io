@@ -4,4 +4,4 @@ title: About
 permalink: /about/
 ---
 
-I am a computer science student specializing in deep learning/computer vision. Read about my projects if you want.
+I am a newly-graduated computer science student who likes reverse engineering, electronics, and sometimes machine learning. Read about my projects if you want.
