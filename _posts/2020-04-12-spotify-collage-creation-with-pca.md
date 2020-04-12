@@ -91,6 +91,8 @@ We start by creating a map of tile indices to positions in the collage:
 
 ```python
 n_img = int(np.ceil(np.sqrt(n_tiles)))
+
+# We need an odd number of tiles to account for the seed
 if n_img % 2 == 0: 
     n_img += 1
 
@@ -112,3 +114,30 @@ ind_map[c, c] = seed_ind+1
 ```
 
 `tot_similarity_to_neighbors` is an array of the sum of similarties for each tile to its four closest neighbors. We then set the similarity of all other tiles to our seed to zero so we don't accidentally pick the seed again.
+
+Notice that we're starting indices at one so we can use zero as a marker that an index hasn't yes been filled.
+
+We'll then define a helper function to set a position `(x, y)` in the index map closest to `(xs, ys)`:
+
+```python
+def get_ind_at(ys, xs, y, x):
+    target_inds = ind_map[ys, xs]
+
+    # Bail if we haven't yet set the indices at ys and xs
+    if (target_inds == 0).sum() > 0: 
+        return
+
+    # Sum the similarity vectors for our two target indices
+    similarities = pairwise_similarity[target_inds-1].sum(0)
+
+    # Bail if we have already invalidated the indices
+    if similarities.max() == 0: 
+        return
+
+    # Get the most similar index
+    chosen_ind = np.argsort(similarities)[-1] + 1
+    ind_map[y, x] = chosen_ind
+
+    # Invalidate the index chosen
+    pairwise_similarity[np.arange(n_tiles), chosen_ind-1] = 0
+```
