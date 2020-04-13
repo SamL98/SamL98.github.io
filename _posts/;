@@ -176,20 +176,3 @@ while l < c and (ind_map > 0).sum() < n_tiles:
 
     l += 1
 ```
-
-The final step is to take the index map and create the collage:
-
-```python
-from skimage.io import imsave
-
-collage = np.zeros((n_img * TILE_SIZE, n_img * TILE_SIZE, 3), dtype=np.uint8)
-
-for i, row in enumerate(ind_map):
-    for j, ind in enumerate(row):
-        if ind == 0: 
-            continue
-
-        collage[i*TILE_SIZE:(i+1)*TILE_SIZE, j*TILE_SIZE:(j+1)*TILE_SIZE] = tiles[ind-1].reshape(TILE_SIZE, TILE_SIZE, 3)
-
-imsave('collage.png', collage)
-```
