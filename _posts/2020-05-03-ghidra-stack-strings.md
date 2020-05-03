@@ -9,6 +9,6 @@ In this post, I'll be discussing a method I recently implemented to have stack s
 
 ![orig_ss_example](/images/original_ss_example.png)
 
-into this, moderately better garbage:
+into this, significatly better garbage:
 
-~[new_ss_example](/images/processed_ss_example.png)
+![new_ss_example](/images/processed_ss_example.png)
