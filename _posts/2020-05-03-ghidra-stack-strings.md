@@ -1,5 +1,6 @@
 ---
 layout: post
+thumbnail: /images/ss_thumbnail.png
 title:  "Decompiling Stack Strings in Ghidra"
 date:   2020-05-03 15:30:10 -0500
 categories: jekyll update
