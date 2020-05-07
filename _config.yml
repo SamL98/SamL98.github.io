@@ -21,7 +21,8 @@ baseurl: "" # the subpath of your site, e.g. /blog
 github_username: SamL98
 
 # Build settings
-markdown: kramdown
+#markdown: kramdown
+markdown: CommonMarkGhPages
 theme: minima
 plugins:
   - jekyll-feed
