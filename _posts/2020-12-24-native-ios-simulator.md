@@ -5,9 +5,9 @@ date:   2020-12-24 12:30:10 -0500
 categories: jekyll update
 ---
 
-Like any mischevious reverse engineer + music lover, I wanted to find a way to download songs from Spotify. (Surprise! Another Spotify post!). I eventually found a way to do this using the Spotify iOS SDK. I'm pretty sure I legally can't say exactly how (fuck the DMCA or whatever) but it works by 1) linking the iOS SDK to an app in Xcode, 2) running that app in the x86 iOS simulator, and 3) selecting a song to play while simulateously saving it to a file. 
+Like any mischevious reverse engineer + music lover, I wanted to find a way to download songs from Spotify. (Surprise! Another Spotify post!). I eventually found a way to do this using the Spotify iOS SDK. I'm pretty sure I legally can't say exactly how (fuck the DMCA or whichever law it is) but it works by 1) linking the iOS SDK to an app in Xcode, 2) running that app in the x86 iOS simulator, and 3) selecting a song to play while simulateously saving it to a file. 
 
-This all works fine (if not a little clunky) but who wants to run the iOS simulator to download a song to their MacBook? (Also no one would want to download a song this way. One, it's illegal and wrong to the artist and to Spotify. Two, you have to have Spotify for it to work so there's no financial motivation for it (except in distribution). I don't even use it, I just like to say I can do it).
+This all works fine (if not a little clunky) but who wants to run the iOS simulator to download a song to their MacBook? (Also no one would want to download a song this way. One, it's illegal and wrong to the artist and to Spotify. Two, you have to have Spotify Premium for it to work so there's no financial motivation for it (except in distribution). I don't even use it, I just like to say I can do it).
 
 But anyways, from a code/concept cleanliness standpoint, I wanted to get this to run as a native Mac app. Now this doesn't *sound* too hard but if you try to link the Spotify iOS SDK (framework) to a Mac app in Xcode, you'll get the following build error:
 
