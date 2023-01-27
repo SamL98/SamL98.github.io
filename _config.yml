@@ -23,7 +23,7 @@ github_username: SamL98
 # Build settings
 #markdown: kramdown
 markdown: CommonMarkGhPages
-theme: minima
+theme: midnight
 plugins:
   - jekyll-feed
 
