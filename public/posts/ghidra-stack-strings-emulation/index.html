@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    
+
+    
+    
+    
+    <title>
+         Decompiling Stack Strings in Ghidra (with Emulation)
+        
+    </title>
+
+        
+            <meta property="og:title" content="Decompiling Stack Strings in Ghidra (with Emulation)" />
+        
+     
+
+     
+         
+     
+
+     
+         
+    
+
+    
+    
+
+    
+    
+        <link href=https://saml98.github.io/fonts.css rel="stylesheet" />
+    
+
+    
+    
+
+
+    
+
+    
+    <link rel="alternate" type="application/atom+xml" title="Sam&#x27;s Internet Home" href="https://saml98.github.io/atom.xml">
+
+    
+    
+    
+        <link rel="stylesheet" type="text/css" href="https://saml98.github.io/theme/dark.css"/>
+    
+
+    <link rel="stylesheet" type="text/css" media="screen" href=https://saml98.github.io/main.css />
+
+
+    
+</head>
+
+
+<body>
+    <div class="content">
+        <header>
+    <div class="main">
+        <a href=https:&#x2F;&#x2F;saml98.github.io>Sam&#x27;s Internet Home</a>
+    </div>
+
+    <nav>
+        
+            <a href=&#x2F;posts style="margin-left: 0.7em">&#x2F;posts</a>
+        
+            <a href=&#x2F;projects style="margin-left: 0.7em">&#x2F;projects</a>
+        
+            <a href=&#x2F;about style="margin-left: 0.7em">&#x2F;about</a>
+        
+    </nav>
+</header>
+
+
+        
+        
+    
+<main>
+    <article>
+        <div class="title">
+            
+            
+    <div class="page-header">
+        Decompiling Stack Strings in Ghidra (with Emulation)<span class="primary-color" style="font-size: 1.6em">.</span>
+    </div>
+
+
+                <div class="meta">
+                    
+                        Posted on <time>2022-05-23</time>
+                    
+
+                    
+                </div>
+        </div>
+
+        
+
+        
+        
+
+        <section class="body">
+            <h2 id="introduction">Introduction</h2>
+<p>In a <a href="/jekyll/update/2020/05/03/ghidra-stack-strings.html">previous post</a> I wrote a script to transform strings dynamically constructed out of packed long words into the full, readable string. </p>
+<p>I did this by implementing a forward pass over the raw pcode, observing <code>COPY</code> operations where the source was packed ascii, finding <code>STORE</code> operations that used this value, merging the substrings, and patching the code to <code>strcpy</code> the full string into the destination.</p>
+<p>This worked fairly well but the code was really gross. For one, I didn't know about Ghidra's <code>PcodeOpAST</code>/<code>VarnodeAST</code> SSA API at the time. But even then, the procedure just seems kind of gross and not very general.</p>
+<p>Therefore, I had the idea of emulation the code to automatically get the string values. No special program analysis needed. This is true but as we'll see later, to implement the full transformation is not so simple. But I'm a big fan of emulating pcode in Ghidra so I prefer this method.</p>
+<h2 id="basic-blocks">Basic Blocks</h2>
+<p>Let's look at function that we want to transform:</p>
+<p><img src="/ss_func.png" alt="example_func" /></p>
+<p>Immediately we run into a problem. We can't just emulate the function from beginning to end since there are many possible execution paths depending on the values of the parameters. For example, if <code>val</code> is at least 1400 (0x578) and less than 10000, then the function never contructs the string and it will not be in the emulator's memory.</p>
+<p>Thankfully, it appears that strings are constructed with a series of contiguous instructions. In other words, they are constructed within a single basic block. Of course, this isn't guaranteed but it seems like a fairly safe assumption to make.</p>
+<p>Therefore, we can emulate every basic block of the function individually to get the full strings.</p>
+<p>As far as I can tell, there is no function in the Ghidra API that gets all the basic blocks for a function so we'll have to implement that ourselves:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span style="color:#b48ead;">from </span><span>ghidra.program.model.block </span><span style="color:#b48ead;">import </span><span>BasicBlockModel
+</span><span>
+</span><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">getBasicBlocks</span><span>(</span><span style="color:#bf616a;">func</span><span>):
+</span><span>    bbm = </span><span style="color:#bf616a;">BasicBlockModel</span><span>(currentProgram)
+</span><span>    buf = bbm.</span><span style="color:#bf616a;">getCodeBlocksContaining</span><span>(func.entryPoint, TaskMonitor.</span><span style="color:#bf616a;">DUMMY</span><span>)
+</span><span>    blocks = []
+</span><span>
+</span><span>    </span><span style="color:#65737e;"># Do BFS on the entrypoint basic block(s).
+</span><span>    </span><span style="color:#b48ead;">while </span><span style="color:#96b5b4;">len</span><span>(buf) &gt; </span><span style="color:#d08770;">0</span><span>:
+</span><span>        block = buf.</span><span style="color:#bf616a;">pop</span><span>(</span><span style="color:#d08770;">0</span><span>)
+</span><span>
+</span><span>        </span><span style="color:#b48ead;">if </span><span>block not in blocks and </span><span style="color:#bf616a;">getFunctionContaining</span><span>(block.minAddress) == func:
+</span><span>            blocks.</span><span style="color:#bf616a;">append</span><span>(block)
+</span><span>
+</span><span>            </span><span style="color:#96b5b4;">iter </span><span>= block.</span><span style="color:#bf616a;">getDestinations</span><span>(TaskMonitor.</span><span style="color:#bf616a;">DUMMY</span><span>)
+</span><span>
+</span><span>            </span><span style="color:#b48ead;">while </span><span style="color:#96b5b4;">iter</span><span>.</span><span style="color:#bf616a;">hasNext</span><span>():
+</span><span>                buf.</span><span style="color:#bf616a;">append</span><span>(</span><span style="color:#96b5b4;">iter</span><span>.</span><span style="color:#bf616a;">next</span><span>().destinationBlock)
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">return </span><span>blocks
+</span></code></pre>
+<h2 id="emulation">Emulation</h2>
+<p>Let's now design an API to emulate the basic blocks. </p>
+<p>Something like this seems reasonable:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span>cpuState = </span><span style="color:#bf616a;">emulate</span><span>(block.minAddress, </span><span style="color:#65737e;"># from
+</span><span>                   block.maxAddress) </span><span style="color:#65737e;"># to
+</span></code></pre>
+<p>Our <code>emulate</code> function will return an object representing the resulting CPU state that we can read registers/memory from.</p>
+<p>Now let's write <code>emulate</code>'s implementation:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">emulate</span><span>(</span><span style="color:#bf616a;">startAddr</span><span>, </span><span style="color:#bf616a;">endAddr</span><span>):
+</span><span>    emu = </span><span style="color:#bf616a;">Emulator</span><span>()
+</span><span>    emu.</span><span style="color:#bf616a;">set_pc</span><span>(startAddr)
+</span><span>    emu.</span><span style="color:#bf616a;">set_sp</span><span>(</span><span style="color:#d08770;">0xf0000000</span><span>)
+</span><span>
+</span><span>    prev_pc = </span><span style="color:#d08770;">None
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">while </span><span>emu.</span><span style="color:#bf616a;">get_pc</span><span>() != endAddr.offset and emu.</span><span style="color:#bf616a;">get_pc</span><span>() != prev_pc:
+</span><span>        prev_pc = emu.</span><span style="color:#bf616a;">get_pc</span><span>()
+</span><span>        emu.</span><span style="color:#bf616a;">step</span><span>()
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">return </span><span>emu
+</span></code></pre>
+<p>First, we'll create an <code>Emulator</code> object to wrap Ghidra's <code>EmulatorHelper</code>. This isn't strictly necessary but I don't really like the <code>EmulatorHelper</code> interface so I usually prefer to write my own.</p>
+<p>Then we'll simply step the emulator until <code>endAddr</code> is hit or the current PC equals the previous PC, i.e. the emulator has hit an infinite loop.</p>
+<p>One caveat is that we first have to do a small fixup to <code>endAddr</code> because of the way Ghidra's <code>AddressSet</code>s work. Since the bounds are inclusive <code>block.maxAddress</code> will return the address of the last byte of the last instruction of the block. If we left <code>endAddr</code> unmodified, our emulation loop would never terminate because <code>endAddr</code> does not point to the beginning of the last instruction of the block.</p>
+<p>Therefore, we'll slightly adjust it:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span>    </span><span style="color:#b48ead;">if </span><span style="color:#bf616a;">getInstructionAt</span><span>(endAddr) is </span><span style="color:#d08770;">None</span><span>:
+</span><span>        endAddr = </span><span style="color:#bf616a;">getInstructionBefore</span><span>(endAddr).address
+</span></code></pre>
+<p>If we try running this, we'll see that it never terminates. Why?</p>
+<p>We can make the emulator output a trace to see what's happening:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>10133f5a0
+</span><span>10133f5a7
+</span><span>10133f5a9
+</span><span>10133f598
+</span><span>1013413d8
+</span><span>1013413dd
+</span><span>10133f5a0
+</span></code></pre>
+<p>We see that there's an infinite loop longer than one instruction. If we look up these addresses in the binary, we see that control flow is jumping between <code>some __stub_helper</code> -&gt; <code>__stubs::dyld_stub_binder</code> -&gt; <code>__stub_helper::dyld_stub_binder</code> -&gt; <code>some __stub_helper</code>. It seems that we're trying to call a dynamically linked function which has not yet been resolved.</p>
+<p>If go to the beginning of the trace to find the last instruction executed in our target function, we see it's <code>call FUN_1012fe750</code>. We could put in a check in our emulator loop to skip over this specific call but let's instead an option in our <code>emulate</code> interface to skip calls.</p>
+<p>So our new interface will look like:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span>cpuState = </span><span style="color:#bf616a;">emulate</span><span>(block.minAddress, </span><span style="color:#65737e;"># from
+</span><span>                   block.maxAddress, </span><span style="color:#65737e;"># to
+</span><span>                   </span><span style="color:#bf616a;">skip_calls</span><span>=</span><span style="color:#d08770;">True</span><span>)
+</span></code></pre>
+<p>Now let's look at our <code>Emulator</code> wrapper class and its implementation of <code>step</code>:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span style="color:#b48ead;">class </span><span style="color:#ebcb8b;">Emulator</span><span style="color:#eff1f5;">(</span><span style="color:#a3be8c;">object</span><span style="color:#eff1f5;">):
+</span><span>    </span><span style="color:#b48ead;">def </span><span style="color:#96b5b4;">__init__</span><span>(</span><span style="color:#bf616a;">self</span><span>):
+</span><span>        </span><span style="color:#bf616a;">self</span><span>.emu = </span><span style="color:#bf616a;">EmulatorHelper</span><span>(currentProgram)
+</span><span>        </span><span style="color:#bf616a;">self</span><span>.pc_reg = </span><span style="color:#bf616a;">self</span><span>.emu.</span><span style="color:#bf616a;">getPCRegister</span><span>()
+</span><span>        </span><span style="color:#bf616a;">self</span><span>.sp_reg = </span><span style="color:#bf616a;">self</span><span>.emu.</span><span style="color:#bf616a;">getStackPointerRegister</span><span>()
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">get_pc</span><span>(</span><span style="color:#bf616a;">self</span><span>):
+</span><span>        </span><span style="color:#b48ead;">return </span><span style="color:#bf616a;">self</span><span>.emu.</span><span style="color:#bf616a;">readRegister</span><span>(</span><span style="color:#bf616a;">self</span><span>.pc_reg)
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">set_pc</span><span>(</span><span style="color:#bf616a;">self</span><span>, </span><span style="color:#bf616a;">val</span><span>):
+</span><span>        </span><span style="color:#b48ead;">if </span><span style="color:#96b5b4;">isinstance</span><span>(val, Address):
+</span><span>            val = val.offset
+</span><span>        </span><span style="color:#bf616a;">self</span><span>.emu.</span><span style="color:#bf616a;">writeRegister</span><span>(</span><span style="color:#bf616a;">self</span><span>.pc_reg, val)
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">get_pc</span><span>(</span><span style="color:#bf616a;">self</span><span>):
+</span><span>        </span><span style="color:#b48ead;">return </span><span style="color:#bf616a;">self</span><span>.emu.</span><span style="color:#bf616a;">readRegister</span><span>(</span><span style="color:#bf616a;">self</span><span>.sp_reg)
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">set_sp</span><span>(</span><span style="color:#bf616a;">self</span><span>, </span><span style="color:#bf616a;">val</span><span>):
+</span><span>        </span><span style="color:#b48ead;">if </span><span style="color:#96b5b4;">isinstance</span><span>(val, Address):
+</span><span>            val = val.offset
+</span><span>        </span><span style="color:#bf616a;">self</span><span>.emu.</span><span style="color:#bf616a;">writeRegister</span><span>(</span><span style="color:#bf616a;">self</span><span>.sp_reg, val)
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">step</span><span>(</span><span style="color:#bf616a;">self</span><span>, </span><span style="color:#bf616a;">skip_calls</span><span>):
+</span><span>        pc = </span><span style="color:#bf616a;">toAddr</span><span>(</span><span style="color:#bf616a;">self</span><span>.</span><span style="color:#bf616a;">get_pc</span><span>())
+</span><span>        insn = </span><span style="color:#bf616a;">getInstructionAt</span><span>(pc)
+</span><span>
+</span><span>        </span><span style="color:#b48ead;">if </span><span>skip_calls and insn.flowType.</span><span style="color:#bf616a;">isCall</span><span>():
+</span><span>            new_pc = pc.</span><span style="color:#bf616a;">add</span><span>(insn.length)
+</span><span>            </span><span style="color:#bf616a;">self</span><span>.</span><span style="color:#bf616a;">set_pc</span><span>(new_pc)
+</span><span>            </span><span style="color:#b48ead;">return
+</span><span>
+</span><span>        prev_pc = pc
+</span><span>        </span><span style="color:#bf616a;">self</span><span>.emu.</span><span style="color:#bf616a;">step</span><span>(TaskMonitor.</span><span style="color:#bf616a;">DUMMY</span><span>)
+</span></code></pre>
+<p>Now we should be able to emulate all of the basic blocks of our function:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">getStackStrings</span><span>():
+</span><span>    func = </span><span style="color:#bf616a;">getFunctionContaining</span><span>(currentAddress)
+</span><span>    blocks = </span><span style="color:#bf616a;">getBasicBlocks</span><span>(func)
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">for </span><span>block </span><span style="color:#b48ead;">in </span><span>blocks:
+</span><span>        </span><span style="color:#96b5b4;">print</span><span>(&#39;</span><span style="color:#a3be8c;">Emulating block </span><span style="color:#d08770;">%s</span><span style="color:#a3be8c;"> - </span><span style="color:#d08770;">%s</span><span>&#39; % (block.minAddress, block.maxAddress))
+</span><span>
+</span><span>        cpuState = </span><span style="color:#bf616a;">emulate</span><span>(block.minAddress,
+</span><span>                           block.maxAddress,
+</span><span>                           </span><span style="color:#bf616a;">skip_calls</span><span>=</span><span style="color:#d08770;">True</span><span>)
+</span></code></pre>
+<p>and we can validate that we successfully emulate all the blocks:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>Emulating block 1012fe590 - 1012fe5a0
+</span><span>Emulating block 1012fe5b9 - 1012fe63c
+</span><span>Emulating block 1012fe5a1 - 1012fe5ae
+</span><span>Emulating block 1012fe646 - 1012fe662
+</span><span>Emulating block 1012fe63d - 1012fe645
+</span><span>Emulating block 1012fe663 - 1012fe6e6
+</span><span>Emulating block 1012fe5af - 1012fe5b8
+</span><span>Emulating block 1012fe708 - 1012fe709
+</span><span>Emulating block 1012fe6f0 - 1012fe707
+</span><span>Emulating block 1012fe6e7 - 1012fe6ef
+</span></code></pre>
+<h2 id="watchpoints">Watchpoints</h2>
+<p>We could now pull out the strings from the CPU state directly but we need to know which instructions construct the string. Therefore we need watchpoints. Here's the plan:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>1. Keep track of all calls to `operator.new`.
+</span><span>2. Observe all writes to the allocated buffers.
+</span><span>3. Emulate the basic block.
+</span><span>4. Patch the instructions that wrote strings to the allocated buffers.
+</span></code></pre>
+<p>So first we need to implement support for hooking a function call.</p>
+<p>We change our call to emulate to look something like this:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span>cpuState = </span><span style="color:#bf616a;">emulate</span><span>(block.minAddress,
+</span><span>                   block.maxAddress,
+</span><span>                   </span><span style="color:#bf616a;">hooks</span><span>={func.entryPoint: malloc </span><span style="color:#b48ead;">for </span><span>func </span><span style="color:#b48ead;">in </span><span style="color:#bf616a;">getGlobalFunctions</span><span>(&#39;</span><span style="color:#a3be8c;">operator.new</span><span>&#39;)},
+</span><span>                   </span><span style="color:#bf616a;">skip_calls</span><span>=</span><span style="color:#d08770;">True</span><span>)
+</span></code></pre>
+<p>where we will define <code>malloc</code> to be the code we want to run when <code>operator.new</code> is called.</p>
+<p>We then need to change our emulator loop so that every time a function is about to be called (or skipped in our case), if the destination is in our <code>hooks</code> dict, we run the corresponding handler code.</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">emulate</span><span>(</span><span style="color:#bf616a;">startAddr</span><span>, </span><span style="color:#bf616a;">endAddr</span><span>, </span><span style="color:#bf616a;">hooks</span><span>=</span><span style="color:#d08770;">None</span><span>, </span><span style="color:#bf616a;">skip_calls</span><span>=</span><span style="color:#d08770;">False</span><span>):
+</span><span>    </span><span style="color:#d08770;">...
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">while </span><span>emu.</span><span style="color:#bf616a;">get_pc</span><span>() != endAddr.offset and emu.</span><span style="color:#bf616a;">get_pc</span><span>() != prev_pc:
+</span><span>        pc = </span><span style="color:#bf616a;">toAddr</span><span>(emu.</span><span style="color:#bf616a;">get_pc</span><span>())
+</span><span>
+</span><span>        </span><span style="color:#b48ead;">for </span><span>ref </span><span style="color:#b48ead;">in </span><span style="color:#bf616a;">getReferencesFrom</span><span>(pc):
+</span><span>            </span><span style="color:#b48ead;">if </span><span>ref.referenceType.</span><span style="color:#bf616a;">isCall</span><span>() and ref.toAddress in hooks:
+</span><span>                dest = ref.toAddress
+</span><span>                </span><span style="color:#bf616a;">call_hook</span><span>(dest, hooks[dest], emu)
+</span><span>
+</span><span>        prev_pc = pc.offset
+</span><span>        emu.</span><span style="color:#bf616a;">step</span><span>(skip_calls)
+</span><span>
+</span><span>    </span><span style="color:#d08770;">...
+</span></code></pre>
+<p>We define a separate <code>call_hook</code> function so that we can pass our handler code the parameters passed to <code>operator.new</code>:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">call_hook</span><span>(</span><span style="color:#bf616a;">pc</span><span>, </span><span style="color:#bf616a;">handler</span><span>, </span><span style="color:#bf616a;">emu</span><span>):
+</span><span>    func = </span><span style="color:#bf616a;">getFunctionAt</span><span>(pc)
+</span><span>    args = [emu.</span><span style="color:#bf616a;">readVar</span><span>(param) </span><span style="color:#b48ead;">for </span><span>param </span><span style="color:#b48ead;">in </span><span>func.parameters]
+</span><span>
+</span><span>    retval = </span><span style="color:#bf616a;">handler</span><span>(emu, *args)
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">if </span><span>retval is not </span><span style="color:#d08770;">None </span><span>and func.</span><span style="color:#bf616a;">getReturn</span><span>() is not </span><span style="color:#d08770;">None</span><span>:
+</span><span>        emu.</span><span style="color:#bf616a;">writeVar</span><span>(func.</span><span style="color:#bf616a;">getReturn</span><span>(), retval)
+</span></code></pre>
+<p>Here we assume that we've defined the function signature for the function we want to hook in Ghidra so that we can inspect the input locations of the function using <code>function.parameters</code> as well as the output using <code>func.getReturn()</code>.</p>
+<p>We can then add the <code>readVar</code> and <code>writeVar</code> methods to our <code>Emulator</code> class:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span style="color:#b48ead;">class </span><span style="color:#ebcb8b;">Emulator</span><span style="color:#eff1f5;">(</span><span style="color:#a3be8c;">object</span><span style="color:#eff1f5;">)
+</span><span>    </span><span style="color:#d08770;">...
+</span><span>    
+</span><span>    </span><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">readVar</span><span>(</span><span style="color:#bf616a;">self</span><span>, </span><span style="color:#bf616a;">var</span><span>):
+</span><span>        </span><span style="color:#b48ead;">if </span><span>var.</span><span style="color:#bf616a;">isStackVariable</span><span>():
+</span><span>            stackOff = var.</span><span style="color:#bf616a;">getStackOfset</span><span>()
+</span><span>            </span><span style="color:#b48ead;">return </span><span style="color:#bf616a;">self</span><span>.emu.</span><span style="color:#bf616a;">readStackValue</span><span>(stackOff, var.length, </span><span style="color:#d08770;">False</span><span>)
+</span><span>
+</span><span>        </span><span style="color:#b48ead;">elif </span><span>var.</span><span style="color:#bf616a;">isRegisterVariable</span><span>():
+</span><span>            reg = var.</span><span style="color:#bf616a;">getRegister</span><span>()
+</span><span>            </span><span style="color:#b48ead;">return </span><span style="color:#bf616a;">self</span><span>.emu.</span><span style="color:#bf616a;">readRegister</span><span>(reg)
+</span><span>
+</span><span>        </span><span style="color:#b48ead;">else</span><span>:
+</span><span>            throw </span><span style="color:#bf616a;">NotImplementedError</span><span>(&#39;</span><span style="color:#a3be8c;">Emulator.readVar not supported for Variable </span><span style="color:#d08770;">%s</span><span>&#39; % var)
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">writeVar</span><span>(</span><span style="color:#bf616a;">self</span><span>, </span><span style="color:#bf616a;">var</span><span>, </span><span style="color:#bf616a;">val</span><span>):
+</span><span>        </span><span style="color:#b48ead;">if </span><span>var.</span><span style="color:#bf616a;">isStackVariable</span><span>():
+</span><span>            stackOff = var.</span><span style="color:#bf616a;">getStackOfset</span><span>()
+</span><span>            </span><span style="color:#b48ead;">return </span><span style="color:#bf616a;">self</span><span>.emu.</span><span style="color:#bf616a;">writeStackValue</span><span>(stackOff, var.length, val)
+</span><span>
+</span><span>        </span><span style="color:#b48ead;">elif </span><span>var.</span><span style="color:#bf616a;">isRegisterVariable</span><span>():
+</span><span>            reg = var.</span><span style="color:#bf616a;">getRegister</span><span>()
+</span><span>            </span><span style="color:#b48ead;">return </span><span style="color:#bf616a;">self</span><span>.emu.</span><span style="color:#bf616a;">writeRegister</span><span>(reg, val)
+</span><span>
+</span><span>        </span><span style="color:#b48ead;">else</span><span>:
+</span><span>            throw </span><span style="color:#bf616a;">NotImplementedError</span><span>(&#39;</span><span style="color:#a3be8c;">Emulator.writeVar not supported for Variable </span><span style="color:#d08770;">%s</span><span>&#39; % var)
+</span></code></pre>
+<p>We can finally write our <code>malloc</code> hook to &quot;allocate&quot; a buffer and </p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span>    </span><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">malloc</span><span>(</span><span style="color:#bf616a;">emu</span><span>, </span><span style="color:#bf616a;">size</span><span>, *</span><span style="color:#bf616a;">args</span><span>):
+</span><span>        ptr = heap.</span><span style="color:#bf616a;">alloc</span><span>(size)
+</span><span>        addr = </span><span style="color:#bf616a;">toAddr</span><span>(ptr)
+</span><span>
+</span><span>        </span><span style="color:#b48ead;">if </span><span>size &gt; </span><span style="color:#d08770;">0</span><span>:
+</span><span>            bufs.</span><span style="color:#bf616a;">append</span><span>(</span><span style="color:#bf616a;">Buffer</span><span>(addr, size))
+</span><span>            emu.</span><span style="color:#bf616a;">watch</span><span>(addr, size, </span><span style="color:#bf616a;">handler</span><span>=handle_write)
+</span><span>
+</span><span>        </span><span style="color:#b48ead;">return </span><span>ptr
+</span></code></pre>
+<p>We use a simple bump allocator for our <code>heap</code> object (take a look at the code in the repo if you're curious, there's already too many code snippets in here and there are more on the way).</p>
+<p>The important thing to note is that we keep track of the allocated buffers and have the emulator watch for any writes to them.</p>
+<p>To actually implement the watchpoints, we can use the <code>EmulatorHelper</code>'s <code>trackedMemoryWriteSet</code> feature. However, this property keep track of all the varnodes that have been written to since the emulation begin -- not the varnodes written on the previously emulated instruction.</p>
+<p>What we can do to work around this is keep track of the previous write set and subtract it from the current <code>trackedMemoryWriteSet</code>. However this is still not ideal since that means we can only trigger a watchpoint for an address once (after it's written the first time, it will always be subtracted from the current write set).</p>
+<p>This is ok, however, for our purposes since we only expect our allocated strings to be written to once.</p>
+<p>Using this assumption to simplify things even further, we can just use the full write set and remove watchpoints immediately after they're triggered.</p>
+<p>Here's our new <code>Emulator</code> implementation:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span style="color:#b48ead;">class </span><span style="color:#ebcb8b;">Emulator</span><span style="color:#eff1f5;">(</span><span style="color:#a3be8c;">object</span><span style="color:#eff1f5;">):
+</span><span>    </span><span style="color:#b48ead;">def </span><span style="color:#96b5b4;">__init__</span><span>(</span><span style="color:#bf616a;">self</span><span>):
+</span><span>        </span><span style="color:#d08770;">...
+</span><span>        </span><span style="color:#bf616a;">self</span><span>.emu.</span><span style="color:#bf616a;">enableMemoryWriteTracking</span><span>(</span><span style="color:#d08770;">True</span><span>)
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">step</span><span>(</span><span style="color:#bf616a;">self</span><span>, </span><span style="color:#bf616a;">skip_calls</span><span>):
+</span><span>        </span><span style="color:#d08770;">...
+</span><span>        </span><span style="color:#bf616a;">self</span><span>.emu.</span><span style="color:#bf616a;">step</span><span>(TaskMonitor.</span><span style="color:#bf616a;">DUMMY</span><span>)
+</span><span>
+</span><span>        </span><span style="color:#b48ead;">for </span><span>addrSet </span><span style="color:#b48ead;">in </span><span style="color:#bf616a;">self</span><span>.emu.trackedMemoryWriteSet:
+</span><span>            size = addrSet.maxAddress.</span><span style="color:#bf616a;">subtract</span><span>(addrSet.minAddress)
+</span><span>
+</span><span>            </span><span style="color:#b48ead;">if </span><span>addrSet.minAddress.</span><span style="color:#bf616a;">isMemoryAddress</span><span>() and size &gt; </span><span style="color:#d08770;">0</span><span>:
+</span><span>                calledHandles = []
+</span><span>
+</span><span>                </span><span style="color:#b48ead;">for </span><span>addr, handler </span><span style="color:#b48ead;">in </span><span style="color:#bf616a;">self</span><span>.watchpoints.</span><span style="color:#bf616a;">items</span><span>():
+</span><span>                    </span><span style="color:#b48ead;">if </span><span>addr &gt;= addrSet.minAddress and addr &lt;= addrSet.maxAddress:
+</span><span>                        val = </span><span style="color:#bf616a;">self</span><span>.</span><span style="color:#bf616a;">read</span><span>(addr, </span><span style="color:#d08770;">1</span><span>)
+</span><span>                        </span><span style="color:#bf616a;">handler</span><span>(addr, </span><span style="color:#d08770;">1</span><span>, val, prev_pc.offset, </span><span style="color:#bf616a;">emu</span><span>=</span><span style="color:#bf616a;">self</span><span>)
+</span><span>                        calledHandles.</span><span style="color:#bf616a;">append</span><span>(addr)
+</span><span>
+</span><span>                </span><span style="color:#b48ead;">for </span><span>addr </span><span style="color:#b48ead;">in </span><span>calledHandles:
+</span><span>                    </span><span style="color:#b48ead;">del </span><span style="color:#bf616a;">self</span><span>.watchpoints[addr]
+</span></code></pre>
+<p>Finally, we need to implement our <code>handle_write</code> watchpoint hook to update the keep track of where the string is being written to ((register, offset) pair like in the previous tutorial) as well the instructions that being used to construct the string.</p>
+<p>I just realized that since we're only keeping tracked of <code>malloc</code>ed buffers, the register will always be <code>RAX</code> but I'll keep it this way since I'm lazy and this also makes it more easily extensible to actual stack strings.</p>
+<p>Anyways, our watchpoint hook will basically update these parameters for every buffer we're keeping track of:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">handle_write</span><span>(</span><span style="color:#bf616a;">addr</span><span>, </span><span style="color:#bf616a;">size</span><span>, </span><span style="color:#bf616a;">val</span><span>, </span><span style="color:#bf616a;">pc</span><span>, </span><span style="color:#bf616a;">emu</span><span>=</span><span style="color:#d08770;">None</span><span>):
+</span><span>    </span><span style="color:#b48ead;">for </span><span>buf </span><span style="color:#b48ead;">in </span><span>bufs:
+</span><span>        </span><span style="color:#b48ead;">if </span><span>buf.start &lt;= addr and addr &lt;= buf.end:
+</span><span>            buf.write_start = </span><span style="color:#96b5b4;">min</span><span>(buf.write_start, pc)
+</span><span>            buf.write_end   = </span><span style="color:#96b5b4;">max</span><span>(buf.write_end  , pc)
+</span><span>
+</span><span>            insn = </span><span style="color:#bf616a;">getInstructionAt</span><span>(</span><span style="color:#bf616a;">toAddr</span><span>(pc))
+</span><span>
+</span><span>            </span><span style="color:#b48ead;">for </span><span>i </span><span style="color:#b48ead;">in </span><span style="color:#96b5b4;">range</span><span>(insn.numOperands):
+</span><span>                </span><span style="color:#b48ead;">if </span><span>insn.</span><span style="color:#bf616a;">getOperandRefType</span><span>(i).</span><span style="color:#bf616a;">isWrite</span><span>():
+</span><span>                    objs = insn.</span><span style="color:#bf616a;">getOpObjects</span><span>(i)
+</span><span>
+</span><span>                    </span><span style="color:#b48ead;">for </span><span>obj </span><span style="color:#b48ead;">in </span><span>objs:
+</span><span>                        </span><span style="color:#b48ead;">if </span><span style="color:#96b5b4;">isinstance</span><span>(obj, Register):
+</span><span>                            buf.reg = obj
+</span><span>                        </span><span style="color:#b48ead;">elif </span><span style="color:#96b5b4;">isinstance</span><span>(obj, Scalar):
+</span><span>                            buf.off = </span><span style="color:#96b5b4;">min</span><span>(buf.off, obj.unsignedValue)
+</span></code></pre>
+<h2 id="putting-it-all-together">Putting it All Together</h2>
+<p>We can now finally pull out all the stack strings that our emulated basic blocks constructed:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span style="color:#b48ead;">for </span><span>block </span><span style="color:#b48ead;">in </span><span>blocks:
+</span><span>    bufs = []
+</span><span>
+</span><span>    </span><span style="color:#d08770;">... </span><span style="color:#65737e;"># emulate
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">for </span><span>buf </span><span style="color:#b48ead;">in </span><span>bufs:
+</span><span>        </span><span style="color:#b48ead;">try</span><span>:
+</span><span>            contents = cpuState.</span><span style="color:#bf616a;">read</span><span>(buf.start, buf.size).</span><span style="color:#bf616a;">decode</span><span>(&#39;</span><span style="color:#a3be8c;">utf-8</span><span>&#39;)
+</span><span>        </span><span style="color:#b48ead;">except </span><span>UnicodeDecodeError:
+</span><span>            </span><span style="color:#b48ead;">continue
+</span><span>
+</span><span>        </span><span style="color:#b48ead;">for </span><span>i, b </span><span style="color:#b48ead;">in </span><span style="color:#96b5b4;">enumerate</span><span>(contents):
+</span><span>            </span><span style="color:#b48ead;">if </span><span>b == </span><span style="color:#b48ead;">u</span><span>&#39;</span><span style="color:#96b5b4;">\x00</span><span>&#39;:
+</span><span>                stackString = </span><span style="color:#bf616a;">StackString</span><span>(contents[:i+</span><span style="color:#d08770;">1</span><span>], buf.reg, buf.off, buf.write_start, buf.write_end)
+</span><span>                stackStrings.</span><span style="color:#bf616a;">append</span><span>(stackString)
+</span><span>
+</span><span>            </span><span style="color:#b48ead;">if </span><span>b not in string.printable:
+</span><span>                </span><span style="color:#b48ead;">break
+</span></code></pre>
+<p>This procedure is similar to before, if the buffer's contents is decodable as null-terminated utf-8, we log it as a stack string to patch.</p>
+<h2 id="aside-the-patch">Aside: The Patch</h2>
+<p>As I mentioned in the previous post, the patch we were using was pretty long. For reference, this is what is was:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>    push rsi            ; save all the registers we&#39;re going to use
+</span><span>    push rdi
+</span><span>    push rax
+</span><span>    lea rsi, [0x9] ---  ; get our string address into the source register
+</span><span>--- jmp strlen + 2   |  ; jump over the string
+</span><span>|   s            &lt;----
+</span><span>|   t
+</span><span>|   a
+</span><span>|   c
+</span><span>|   k
+</span><span>|
+</span><span>|   s
+</span><span>|   t
+</span><span>|   r
+</span><span>|   i
+</span><span>|   n
+</span><span>|   g
+</span><span>|   \x00
+</span><span>--&gt; lea rdi, [reg + off]  ; get our register + offset into the destination register
+</span><span>    call strcpy           ; call strcpy
+</span><span>    pop rax               ; restore the registers we used
+</span><span>    pop rdi
+</span><span>    pop rsi
+</span></code></pre>
+<p>I found a slightly more space-efficient way to jump over the string and get the string address into <code>RSI</code>: call the destination block then pop <code>RSI</code>. When the <code>CALL</code> is executed, the &quot;next PC&quot; (the address of the string) will be pushed onto the stack. Then we can just pop this address into <code>RSI</code>.</p>
+<p>Here is the new patch for reference (using a shitty macro assembler language I hacked together):</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>push rdi
+</span><span>push rsi
+</span><span>push rax
+</span><span>
+</span><span>call ${strlen_plus_5}
+</span><span>${str}
+</span><span>pop rsi
+</span><span>
+</span><span>@if (off == 0)
+</span><span>
+</span><span>@if (reg.lower() != &#39;rax&#39;)
+</span><span>push reg
+</span><span>@endif
+</span><span>
+</span><span>pop rdi
+</span><span>
+</span><span>@else
+</span><span>lea rdi, [${reg} + ${off}]
+</span><span>@endif
+</span><span>
+</span><span>call ${strcpy}
+</span><span>
+</span><span>@if (off != 0 or reg.lower() != &#39;rax&#39;)
+</span><span>pop rax
+</span><span>@endif
+</span><span>
+</span><span>pop rsi
+</span><span>pop rdi
+</span></code></pre>
+<h2 id="conclusion">Conclusion</h2>
+<p>As we can see, the script works the same as before, getting these strings to display nicely in the decompiler:</p>
+<p><img src="/new_processed_ss_example.png" alt="result" /></p>
+<p>This was as usual largely a pointless exercise but the code is cleaner now (imo) and I realized there aren't many tutorials out there on how to use Ghidra's emulator. <a href="https://github.com/SamL98/GhidraStackStrings">Here</a>'s the code and thanks for reading.</p>
+
+        </section>
+
+        
+
+    </article>
+</main>
+
+
+    </div>
+</body>
+
+</html>
