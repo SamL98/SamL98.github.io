@@ -118,6 +118,24 @@
         <link rel="stylesheet" type="text/css" href="{{ get_url(path="theme/dark.css") }}" media="(prefers-color-scheme: dark)"/>
     {% endif %}
 
+    {% if theme == "auto" or theme == "toggle" %}
+        <script src={{ get_url(path="js/themetoggle.js") }}></script>
+
+        {% if theme == "auto" %}
+            <script>
+                if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                    setTheme("dark");
+                } else {
+                    setTheme("light");
+                }
+            </script>
+        {% else %}
+            <script>
+                setTheme(getSavedTheme());
+            </script>
+        {% endif %}
+    {% endif %}
+
     <link rel="stylesheet" type="text/css" media="screen" href={{ get_url(path="main.css") }} />
 
 
