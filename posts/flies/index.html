@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    
+
+    
+    
+    
+    <title>
+         How Many Flies are in my Apartment?
+        
+    </title>
+
+        
+            <meta property="og:title" content="How Many Flies are in my Apartment?" />
+        
+     
+
+     
+         
+     
+
+     
+         
+    
+
+    
+    
+
+    
+    
+        <link href=https://saml98.github.io/fonts.css rel="stylesheet" />
+    
+
+    
+    
+
+
+    
+
+    
+    <link rel="alternate" type="application/atom+xml" title="Sam&#x27;s Internet Home" href="https://saml98.github.io/atom.xml">
+
+    
+    
+    
+        <link rel="stylesheet" type="text/css" href="https://saml98.github.io/theme/light.css"/>
+        <link rel="stylesheet" type="text/css" href="https://saml98.github.io/theme/dark.css" media="(prefers-color-scheme: dark)"/>
+    
+
+    
+        <script src=https://saml98.github.io/js/themetoggle.js></script>
+
+        
+            <script>
+                if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                    setTheme("dark");
+                } else {
+                    setTheme("light");
+                }
+            </script>
+        
+    
+
+    <link rel="stylesheet" type="text/css" media="screen" href=https://saml98.github.io/main.css />
+
+
+    
+</head>
+
+
+<script data-goatcounter="https://saml98.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
+
+<body>
+    <div class="content">
+        <header>
+    <div class="main">
+        <a href=https:&#x2F;&#x2F;saml98.github.io>Sam&#x27;s Internet Home</a>
+    </div>
+
+    <nav>
+        
+            <a href=&#x2F;posts style="margin-left: 0.7em">&#x2F;posts</a>
+        
+            <a href=&#x2F;projects style="margin-left: 0.7em">&#x2F;projects</a>
+        
+            <a href=&#x2F;about style="margin-left: 0.7em">&#x2F;about</a>
+        
+
+        
+    </nav>
+</header>
+
+
+        
+        
+    
+<main>
+    <article>
+        <div class="title">
+            
+            
+    <div class="page-header">
+        How Many Flies are in my Apartment?<span class="primary-color" style="font-size: 1.6em">.</span>
+    </div>
+
+
+                <div class="meta">
+                    
+                        Posted on <time>2021-06-13</time>
+                    
+
+                    
+                </div>
+        </div>
+
+        
+
+        
+        
+
+        <section class="body">
+            <h1 id="how-many-flies-are-in-my-apartment">How many flies are in my apartment?</h1>
+<p>Recently, I was sitting on my fire escape with the window to my apartment slightly open. As there are no screens, I wanted to keep it as closed as possible to keep out any bugs. However, I needed to keep it somewhat open so that I'd be able to get back indoors.</p>
+<p>As it was a hot, smelly day in New York City, the flies were abuzz. I found it hard to relax on my illegal balcony knowing that I was basically inviting all of the flies into my apartment for an all-you-can-eat buffet of human detritus.</p>
+<p>This got me thinking how effective the partially closed window is at keeping out the flies. What does the function of flies in my apartment over time look like? The perfect question for a Sunday afternoon when you have no friends (unless you count the flies).</p>
+<h2 id="how-does-a-fly-fly">How does a fly... fly?</h2>
+<p>In order to run this simulation, we need a model of how a fly navigates its trash-filled world. As a first pass, I'll model a fly as moving in a random direction with a random speed for each timestep of the simulation. Pretty simple, but flies do appear to be relatively simple creatures.</p>
+<p>If we take a look at the trajectory of a single fly using this model, it does indeed look random:</p>
+<p><img src="/random_traj.png" alt="random_traj" /></p>
+<p>Now let's simulate a bunch of flies. To do this, first we initialize an array <code>xs</code> to hold the position of the flies. We'll normally distributed this in a <code>2*WORLDHEIGHT x WORLDHEIGHT</code> square. We'll also initialize all the flies to be outside (setting the window to be at <code>x = 0</code> and indoors to be <code>x &gt; 0</code>).</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span>xs = np.random.</span><span style="color:#bf616a;">randn</span><span>(</span><span style="color:#bf616a;">NFLIES</span><span>, </span><span style="color:#d08770;">2</span><span>) * np.</span><span style="color:#bf616a;">array</span><span>([[</span><span style="color:#bf616a;">WORLDHEIGHT </span><span>* </span><span style="color:#d08770;">2</span><span>, </span><span style="color:#bf616a;">WORLDHEIGHT</span><span>]])
+</span><span>xs[(xs[:,</span><span style="color:#d08770;">0</span><span>] &gt; </span><span style="color:#d08770;">0</span><span>),</span><span style="color:#d08770;">0</span><span>] *= -</span><span style="color:#d08770;">1
+</span><span>xs[(xs[:,</span><span style="color:#d08770;">1</span><span>] &lt; </span><span style="color:#d08770;">0</span><span>),</span><span style="color:#d08770;">1</span><span>] *= -</span><span style="color:#d08770;">1
+</span></code></pre>
+<p>Then we'll create another array <code>vs</code> to hold the velocity vectors of the flies.</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span>vs = np.random.</span><span style="color:#bf616a;">randn</span><span>(</span><span style="color:#bf616a;">NFLIES</span><span>, </span><span style="color:#d08770;">2</span><span>)
+</span><span>vs = vs / np.</span><span style="color:#bf616a;">sqrt</span><span>((vs ** </span><span style="color:#d08770;">2</span><span>).</span><span style="color:#bf616a;">sum</span><span>(</span><span style="color:#d08770;">1</span><span>)[:,np.newaxis]) * maxv
+</span></code></pre>
+<p>Then we'll have an update function like so:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">update</span><span>(</span><span style="color:#bf616a;">xs</span><span>, </span><span style="color:#bf616a;">vs</span><span>):
+</span><span>    </span><span style="color:#65737e;"># 1. Propagate the flies.
+</span><span>
+</span><span>    xps = xs + vs * dt
+</span><span>
+</span><span>    </span><span style="color:#65737e;"># 2. Make sure flies can&#39;t go through the glass.
+</span><span>
+</span><span>    inoutmask = (np.</span><span style="color:#bf616a;">sign</span><span>(xps[:,</span><span style="color:#d08770;">0</span><span>]) * np.</span><span style="color:#bf616a;">sign</span><span>(xs[:,</span><span style="color:#d08770;">0</span><span>])) == -</span><span style="color:#d08770;">1
+</span><span>    m = (xps[inoutmask,</span><span style="color:#d08770;">1</span><span>] - xs[inoutmask,</span><span style="color:#d08770;">1</span><span>]) / (xps[inoutmask,</span><span style="color:#d08770;">0</span><span>] - xs[inoutmask,</span><span style="color:#d08770;">0</span><span>] + </span><span style="color:#d08770;">1e-7</span><span>)
+</span><span>    b = xps[inoutmask,</span><span style="color:#d08770;">1</span><span>] - m * xps[inoutmask,</span><span style="color:#d08770;">0</span><span>]
+</span><span>
+</span><span>    invalidmask = b &gt; </span><span style="color:#bf616a;">WINDOWHEIGHT
+</span><span>    idxs = np.</span><span style="color:#bf616a;">where</span><span>(inoutmask)[</span><span style="color:#d08770;">0</span><span>][invalidmask]
+</span><span>    xps[idxs,</span><span style="color:#d08770;">0</span><span>] = </span><span style="color:#d08770;">1e-4 </span><span>* np.</span><span style="color:#bf616a;">sign</span><span>(xs[idxs,</span><span style="color:#d08770;">0</span><span>])
+</span><span>    xps[idxs,</span><span style="color:#d08770;">1</span><span>] = b[invalidmask]
+</span><span>
+</span><span>    </span><span style="color:#65737e;"># 3. Bound the flies.
+</span><span>
+</span><span>    xps[(xps[:,</span><span style="color:#d08770;">0</span><span>] &gt; </span><span style="color:#bf616a;">WORLDHEIGHT</span><span>),</span><span style="color:#d08770;">0</span><span>] = </span><span style="color:#bf616a;">WORLDHEIGHT
+</span><span>    xps[((xps[:,</span><span style="color:#d08770;">1</span><span>] &gt; </span><span style="color:#bf616a;">WORLDHEIGHT</span><span>) &amp; (xps[:,</span><span style="color:#d08770;">0</span><span>] &gt; </span><span style="color:#d08770;">0</span><span>)),</span><span style="color:#d08770;">1</span><span>] = </span><span style="color:#bf616a;">WORLDHEIGHT
+</span><span>    xps[(xps[:,</span><span style="color:#d08770;">1</span><span>] &lt; </span><span style="color:#d08770;">0</span><span>),</span><span style="color:#d08770;">1</span><span>] = </span><span style="color:#d08770;">0
+</span><span>
+</span><span>    </span><span style="color:#65737e;"># 4. Set the new positions and velocities.
+</span><span>
+</span><span>    xs = xps
+</span><span>    vs = np.random.</span><span style="color:#bf616a;">randn</span><span>(</span><span style="color:#bf616a;">NFLIES</span><span>, </span><span style="color:#d08770;">2</span><span>)
+</span><span>    vs = (vs / np.</span><span style="color:#bf616a;">sqrt</span><span>((vs ** </span><span style="color:#d08770;">2</span><span>).</span><span style="color:#bf616a;">sum</span><span>(</span><span style="color:#d08770;">1</span><span>)[:,np.newaxis])) * maxv
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">return </span><span>(xs, vs)
+</span></code></pre>
+<p>Step 2 might require a little explaining. Every timestep, each fly travels in a line from its previous position to its new position. We only want the flies to be able to travel through the crack at the bottom, so we need a way to ensure they can't travel through the glass.</p>
+<p>To do that, we first find all of the flies that changed indoor/outdoor state this timestep (<code>inoutmask</code>). This can be done by comparing the sign of the previous and current <code>x</code> since the window is at <code>x = 0</code>. We can then calculate where the fly crossed the line <code>x = 0</code> using some middle school math.</p>
+<p>It should be impossible for the fly's y-intercept to be greater than the height of the window crack, we for thos flies (<code>invalidmask</code>), we set their y to be where they tried to cross the window and their x to be some small epsilon on the side that they came from. I don't just set it to 0 because then the fly would not get picked up by <code>inoutmask</code> and may be able to travel through the glass on the next iteration.</p>
+<p>Step 3 just makes sure that the fly does not go through the arbitrary walls of the world. Currently, only the floor and the walls of my apartment are defined so a fly can escape to infinity in the -x or +y directions while outdoors. Here's a diagram of the world for the visually-inclined:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>                           ---------------- y = h
+</span><span>                          |               |
+</span><span>                          |               |
+</span><span>                          |               |
+</span><span>                                          |
+</span><span>         _________________________________|            
+</span><span>       x = -h             x = 0            x = h
+</span></code></pre>
+<p>OK, we can finally see the flies fly! Because of the random velocity vectors, they unsurprisingly look quite jittery:</p>
+<p><img src="/anim_random.gif" alt="anim_random" /></p>
+<p>Thankfully, it looks like not too many flies made it indoors.</p>
+<h2 id="smoothness">Smoothness</h2>
+<p>This is great and all but the flies don't look too realistic. Let's make their velocity vectors vary smoothly so that they don't look like a dubstep light show.</p>
+<p>To do this, we'll pick a random angle in the range <code>[-pi/8, pi/8]</code> to rotate each fly's velocity vector by. In this simulation, we won't vary the magnitude of their velocities at all.</p>
+<p>Let's look again at how this changes the trajectory of a single fly:</p>
+<p><img src="/smooth_traj.png" alt="smooth_traj" /></p>
+<p>We only need a couple of changes to our update function:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">update</span><span>(</span><span style="color:#bf616a;">xs</span><span>, </span><span style="color:#bf616a;">vs</span><span>):
+</span><span>    </span><span style="color:#d08770;">...
+</span><span>
+</span><span>    </span><span style="color:#65737e;"># 2. Make sure flies can&#39;t go through the glass.
+</span><span>
+</span><span>    </span><span style="color:#d08770;">...
+</span><span>
+</span><span>    </span><span style="color:#65737e;"># 2.5. Flip the x-velocity of the invalid flies.
+</span><span>
+</span><span>    vs[idxs,</span><span style="color:#d08770;">0</span><span>] *= -</span><span style="color:#d08770;">1
+</span><span>
+</span><span>    </span><span style="color:#65737e;"># 3. Bound the flies.
+</span><span>
+</span><span>    </span><span style="color:#d08770;">...
+</span><span>
+</span><span>    </span><span style="color:#65737e;"># 4. Set the new positions and velocities.
+</span><span>
+</span><span>    </span><span style="color:#d08770;">...
+</span><span>
+</span><span>    dthetas = np.random.</span><span style="color:#bf616a;">randn</span><span>(</span><span style="color:#bf616a;">NFLIES</span><span>) * np.pi / </span><span style="color:#d08770;">8.
+</span><span>    Cs, Ss = np.</span><span style="color:#bf616a;">cos</span><span>(dthetas), np.</span><span style="color:#bf616a;">sin</span><span>(dthetas)
+</span><span>    Rs = np.</span><span style="color:#bf616a;">array</span><span>([[Cs, -Ss], [Ss, Cs]]).</span><span style="color:#bf616a;">transpose</span><span>(</span><span style="color:#d08770;">2</span><span>, </span><span style="color:#d08770;">0</span><span>, </span><span style="color:#d08770;">1</span><span>)
+</span><span>    vs = (Rs * vs.</span><span style="color:#bf616a;">reshape</span><span>(</span><span style="color:#bf616a;">NFLIES</span><span>, </span><span style="color:#d08770;">2</span><span>, </span><span style="color:#d08770;">1</span><span>)).</span><span style="color:#bf616a;">sum</span><span>(</span><span style="color:#bf616a;">axis</span><span>=</span><span style="color:#d08770;">1</span><span>)
+</span><span>
+</span></code></pre>
+<p>While not necessary, Step 2.5 was added so that the flies don't take get stuck keep trying to go through the window as their velocity rotates slowly.</p>
+<p>In Step 4, instead of choosing new random values for <code>vs</code>, we create a random rotation matrix for each fly and rotate their initial velocities by it.</p>
+<p>If we take a look at the animation now, we can see the flies look slightly more realistic (if not still a bit spazzy):</p>
+<p><img src="/anim_smooth.gif" alt="anim_smooth" /></p>
+<h2 id="attraction">Attraction</h2>
+<p>While the flies now obey the laws of aviation, there's still something that seems missing. Normally, flies <em>want</em> to get indoors. They <em>need</em> to get indoors. So to simulate this, I added an attractor (maybe a rotting piece of fruit) at a position <code>A</code> indoors to lure the flies.</p>
+<p>To do this, I added one variable to the fly's state: a scalar value <code>a</code> which represents how close they are to the delicious piece of fruit. The fly will be able to remember the most recent value of <code>a</code> so that it can know whether it's getting warmer or colder.</p>
+<p>Again, we only need to make a few changes in order to simulate this:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">attraction</span><span>(</span><span style="color:#bf616a;">x</span><span>, </span><span style="color:#bf616a;">A</span><span>):
+</span><span>    </span><span style="color:#b48ead;">return </span><span style="color:#d08770;">1. </span><span>/ (</span><span style="color:#d08770;">1e-7 </span><span>+ np.</span><span style="color:#bf616a;">sqrt</span><span>(((x - A.</span><span style="color:#bf616a;">reshape</span><span>(</span><span style="color:#d08770;">1</span><span>, </span><span style="color:#d08770;">2</span><span>)) ** </span><span style="color:#d08770;">2</span><span>).</span><span style="color:#bf616a;">sum</span><span>(</span><span style="color:#d08770;">1</span><span>)))
+</span><span>
+</span><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">update</span><span>(</span><span style="color:#bf616a;">xs</span><span>, </span><span style="color:#bf616a;">vs</span><span>, </span><span style="color:#bf616a;">ats</span><span>):
+</span><span>    </span><span style="color:#65737e;"># 1. Propagate the flies.
+</span><span>
+</span><span>    </span><span style="color:#d08770;">...
+</span><span>
+</span><span>    ats = </span><span style="color:#bf616a;">attraction</span><span>(xs, A)
+</span><span>    atps = </span><span style="color:#bf616a;">attraction</span><span>(xps, A)
+</span><span>
+</span><span>    </span><span style="color:#65737e;"># 4. Set the new positions and velocities.
+</span><span>
+</span><span>    </span><span style="color:#d08770;">...
+</span><span>
+</span><span>    dthetas = np.random.</span><span style="color:#bf616a;">randn</span><span>(</span><span style="color:#bf616a;">NFLIES</span><span>) * np.pi / </span><span style="color:#d08770;">16.
+</span><span>
+</span><span>    wrongmask = atps &lt; ats
+</span><span>    dthetas[wrongmask] += np.random.</span><span style="color:#bf616a;">randn</span><span>(wrongmask.</span><span style="color:#bf616a;">sum</span><span>()) * np.pi / </span><span style="color:#d08770;">8.
+</span><span>
+</span><span>    </span><span style="color:#d08770;">...
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">return </span><span>(xs, vs, ats)
+</span></code></pre>
+<p>The rules for rotating the velocity are simple:</p>
+<ul>
+<li>If the attraction increased from the previous timestep, keep going in the same direction (do nothing)</li>
+<li>Otherwise, rotation by a random angle in the range of <code>[-pi/8, pi/8]</code></li>
+</ul>
+<p>We add another random rotation in the range of <code>[-pi/16, pi/16]</code> just to keep things interesting.</p>
+<p>The fly will keep going in a straight line (with some random jitter) as long as the attraction it sense is increasing. If it senses that it's going in the wrong direction, it will more aggressively explore its neighborhood until it finds a good direction to head in.</p>
+<p>As you can see by the new trajectory, this seems to work fairly well for simulating a stupid but well-motivated fly:</p>
+<p><img src="/attraction_traj.png" alt="attraction_traj" /></p>
+<p>However, it seems on the aggregate, the flies just swarm the attractor. Thankfully this isn't the case in real life as I currently only have two flies in my apartment.</p>
+<p><img src="/anim_attraction.gif" alt="anim_attraction" /></p>
+<h1 id="statistics">Statistics</h1>
+<p>With this information in hand, I finally wanted to answer the popular game show question: &quot;How many flies are in my apartment?&quot;</p>
+<p>The first experiment I ran was to plot the average number of flies given how open the window was over a few max velocities. Here is the result for the random flies:</p>
+<p><img src="/ratio_plot_random.png" alt="ratio_plot_random" /></p>
+<p>Quite nicely, it turns out that as the window, gets more open, the number of flies indoors increases linearly.</p>
+<p>For the smooth flies, we see a less linear function. I'm not quite sure why.</p>
+<p><img src="/ratio_plot_smooth.png" alt="ratio_plot_smooth" /></p>
+<p>The attracted flies produce an even more asymptotic (is that a word?) plot. My hypothesis is that this is because the flies are more likely to find their way to the trash than in other models so it doesn't help them as much when the window is more open.</p>
+<p><img src="/ratio_plot_attraction.png" alt="ratio_plot_attraction" /></p>
+<p>Then I wanted to see how long the simulation ran for affected the number of flies. We see similar results for the random and smooth flies. With faster moving flies (the orange and green plots), random moving or in the smooth case randomly initialized flies are more likely to barrel off towards infinity when outside. Therefore, the total number of flies decreases as the simulation progresses.</p>
+<p><img src="/niter_plot_random.png" alt="niter_plot_random" />
+<img src="/niter_plot_smooth.png" alt="niter_plot_smooth" /></p>
+<p>In the case of the attracted flies, we again see that a higher max velocity results in the number of flies peaking earlier. However, because the flies have some knowledge as to what direction to go in, they tend not to drift out into the ether and the population eventually plateaus.</p>
+<p><img src="/niter_plot_attraction.png" alt="niter_plot_attraction" /></p>
+<h3 id="conclusion">Conclusion</h3>
+<p>Thanks for joining me on this pointless exerise and in case you missed it the answer to the titular question is two. Their names are Buzz and Neil.</p>
+
+        </section>
+
+        
+
+    </article>
+</main>
+
+
+    </div>
+</body>
+
+</html>

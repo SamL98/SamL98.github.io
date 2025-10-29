@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    
+
+    
+    
+    
+    <title>
+         Creating Album Art Collages with PCA
+        
+    </title>
+
+        
+            <meta property="og:title" content="Creating Album Art Collages with PCA" />
+        
+     
+
+     
+         
+     
+
+     
+         
+    
+
+    
+    
+
+    
+    
+        <link href=https://saml98.github.io/fonts.css rel="stylesheet" />
+    
+
+    
+    
+
+
+    
+
+    
+    <link rel="alternate" type="application/atom+xml" title="Sam&#x27;s Internet Home" href="https://saml98.github.io/atom.xml">
+
+    
+    
+    
+        <link rel="stylesheet" type="text/css" href="https://saml98.github.io/theme/light.css"/>
+        <link rel="stylesheet" type="text/css" href="https://saml98.github.io/theme/dark.css" media="(prefers-color-scheme: dark)"/>
+    
+
+    
+        <script src=https://saml98.github.io/js/themetoggle.js></script>
+
+        
+            <script>
+                if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                    setTheme("dark");
+                } else {
+                    setTheme("light");
+                }
+            </script>
+        
+    
+
+    <link rel="stylesheet" type="text/css" media="screen" href=https://saml98.github.io/main.css />
+
+
+    
+</head>
+
+
+<script data-goatcounter="https://saml98.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
+
+<body>
+    <div class="content">
+        <header>
+    <div class="main">
+        <a href=https:&#x2F;&#x2F;saml98.github.io>Sam&#x27;s Internet Home</a>
+    </div>
+
+    <nav>
+        
+            <a href=&#x2F;posts style="margin-left: 0.7em">&#x2F;posts</a>
+        
+            <a href=&#x2F;projects style="margin-left: 0.7em">&#x2F;projects</a>
+        
+            <a href=&#x2F;about style="margin-left: 0.7em">&#x2F;about</a>
+        
+
+        
+    </nav>
+</header>
+
+
+        
+        
+    
+<main>
+    <article>
+        <div class="title">
+            
+            
+    <div class="page-header">
+        Creating Album Art Collages with PCA<span class="primary-color" style="font-size: 1.6em">.</span>
+    </div>
+
+
+                <div class="meta">
+                    
+                        Posted on <time>2020-04-10</time>
+                    
+
+                    
+                </div>
+        </div>
+
+        
+
+        
+        
+
+        <section class="body">
+            <p>In this post, I'll be explaining how I created this collage of album art:</p>
+<p><img src="/collage.png" alt="collage" /></p>
+<h2 id="getting-the-album-art">Getting the Album Art</h2>
+<p>As you might expect, I used the Spotify API to download the album art. I won't go through the code for this but if you know how to interact with an API, it's super straightforward. For this collage, I chose to use the album covers for the 100 songs in my &quot;Top Songs of 2019&quot; + the 100 songs I most recently added to my library.</p>
+<h2 id="decomposing-the-image-set">Decomposing the Image Set</h2>
+<p>Now we'll want to perform PCA on all of the flattened images. For those who don't know, PCA is a method of projecting a dataset onto its &quot;principal components&quot;. Here, principal components are defined as the axes in which the data varies the most. If we then choose to represent the data only using some of these principal components, then we have a more compact representation of how the data varies to use for comparing how similar two vectors in the space are. Here's a link to the <a href="https://en.wikipedia.org/wiki/Principal_component_analysis">Wikipedia</a> if you want to learn the math behind it.</p>
+<p>In our case, each vector in the space is an image. Therefore, when performing PCA, we will first be analyzing which pixels change the most across all the images. Then we will be using these pixels as a smaller vector representation of the image to use for fast comparison. This is a fairly naive approach since images change rapidly on a per-pixel basis. However, looking at the collage produced, it seems to work well enough (you can be the judge of that!). I would suspect that since many album covers (at least the ones in my library) are composed of a central object surrounded by a solid color, picking pixels from the background captures the varying color across images.</p>
+<h3 id="the-code">The Code</h3>
+<p>Without further ado, let's go over the code for this.</p>
+<p>First, we'll load all of the images into a 2D array:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span style="color:#b48ead;">import </span><span>os
+</span><span style="color:#b48ead;">from </span><span>os.path </span><span style="color:#b48ead;">import </span><span>join
+</span><span style="color:#b48ead;">import </span><span>numpy </span><span style="color:#b48ead;">as </span><span>np
+</span><span style="color:#b48ead;">from </span><span>skimage.io </span><span style="color:#b48ead;">import </span><span>imread
+</span><span style="color:#b48ead;">from </span><span>skimage.transform </span><span style="color:#b48ead;">import </span><span>resize
+</span><span>
+</span><span style="color:#bf616a;">TILE_SIZE </span><span>= </span><span style="color:#d08770;">128
+</span><span style="color:#bf616a;">IMAGE_DIR </span><span>= &#39;</span><span style="color:#a3be8c;">images</span><span>&#39;
+</span><span>
+</span><span>tiles = []
+</span><span>
+</span><span style="color:#b48ead;">for </span><span>fname </span><span style="color:#b48ead;">in </span><span>os.</span><span style="color:#bf616a;">listdir</span><span>(</span><span style="color:#bf616a;">IMAGE_DIR</span><span>):
+</span><span>    tile = </span><span style="color:#bf616a;">imread</span><span>(</span><span style="color:#bf616a;">join</span><span>(img_dir, fname))
+</span><span>    tile = </span><span style="color:#bf616a;">imresize</span><span>(tile, (</span><span style="color:#bf616a;">TILE_SIZE</span><span>, </span><span style="color:#bf616a;">TILE_SIZE</span><span>)) </span><span style="color:#65737e;"># resize all the images to a uniform size
+</span><span>    tile = (</span><span style="color:#d08770;">255 </span><span>* tile).</span><span style="color:#bf616a;">astype</span><span>(np.uint8).</span><span style="color:#bf616a;">ravel</span><span>()  </span><span style="color:#65737e;"># convert the image type back to bytes and flatten it
+</span><span>    tiles.</span><span style="color:#bf616a;">append</span><span>(tile)
+</span><span>
+</span><span>tiles = np.</span><span style="color:#bf616a;">array</span><span>(tiles)
+</span></code></pre>
+<p>Now, we'll perform PCA on the dataset. For the collage at the beginning of the article, I used 10 components:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span style="color:#b48ead;">from </span><span>sklearn.decomposition </span><span style="color:#b48ead;">import </span><span style="color:#bf616a;">PCA
+</span><span>
+</span><span style="color:#bf616a;">NUM_COMP </span><span>= </span><span style="color:#d08770;">10
+</span><span>pca = </span><span style="color:#bf616a;">PCA</span><span>(</span><span style="color:#bf616a;">NUM_COMP</span><span>)
+</span><span>
+</span><span>tiles_pca = pca.</span><span style="color:#bf616a;">fit_transform</span><span>(tiles)
+</span><span>pairwise_similarity = tiles_pca.</span><span style="color:#bf616a;">dot</span><span>(tiles_pca.T)
+</span><span>
+</span><span style="color:#65737e;"># Ignore self-similarity
+</span><span>n_tiles = </span><span style="color:#96b5b4;">len</span><span>(tiles)
+</span><span>pairwise_similarity[np.</span><span style="color:#bf616a;">arange</span><span>(n_tiles), np.</span><span style="color:#bf616a;">arange</span><span>(n_tiles)] = </span><span style="color:#d08770;">0
+</span></code></pre>
+<p>Here, we're using a nice vectorized trick to compute the pairwise similarity. <code>tiles_pca</code> will have shape <code>(n_tiles, NUM_COMP)</code> where each row is the PCA-projected vector for each image. Therefore, <code>tiles_pca</code> will have shape <code>(NUM_COMP, n_tiles)</code> and each column will have the vector for each image.</p>
+<p>If we then multiply these two matrices together, each element in the result will be computed as:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>(im1_comp1 im1_comp2 ... im1_comp10) * (im2_comp1    = (im1_comp1 * im2_comp1 + im1_comp2 * im2_comp2 + ... + im1_comp10 * im2_comp10)
+</span><span>                                        im2_comp2
+</span><span>                                        ...
+</span><span>                                        img2_comp10)
+</span></code></pre>
+<p>or the dot product between each image vector. This is equivalent to the unnormalized cosine similarity. So the metric will be biased towards image vector pairs with a large magnitude. Therefore, this metric should make the math nerds cringe but we don't care because it's functionally OK.</p>
+<p>As a final step, we zero out the diagonal of the <code>pairwise_similarity</code> matrix. This is because the diagonal corresponds to the similarity between an image and itself. This will obviously be the highest of all similarities for this image, so we want to ignore it as to not make our collage look blocky.</p>
+<h2 id="arranging-the-tiles">Arranging the Tiles</h2>
+<p>Now that we have a pseudo-pairwise similarity between each tile, we need to use this to construct a collage with a nice color gradient.</p>
+<p>To do this, we'll start from the center and build outwards like so:</p>
+<p><img src="/tile_arrangement.jpg" alt="tiles" /></p>
+<p>We start with a seed that is most similar to four other tiles. Then for each edge of the next shell out, start in the middle. picking the most similar tile to the corresponding shell in the inner shell. Then for each other tile in the outer shell, pick the tile most similar to its two existing neighbors (we're using a 4-connected scheme).</p>
+<h3 id="the-code-1">The Code</h3>
+<p>We start by creating a map of tile indices to positions in the collage:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span>n_img = </span><span style="color:#bf616a;">int</span><span>(np.</span><span style="color:#bf616a;">ceil</span><span>(np.</span><span style="color:#bf616a;">sqrt</span><span>(n_tiles)))
+</span><span>
+</span><span style="color:#65737e;"># We need an odd number of tiles to account for the seed
+</span><span style="color:#b48ead;">if </span><span>n_img % </span><span style="color:#d08770;">2 </span><span>== </span><span style="color:#d08770;">0</span><span>: 
+</span><span>    n_img += </span><span style="color:#d08770;">1
+</span><span>
+</span><span>ind_map = np.</span><span style="color:#bf616a;">zeros</span><span>((n_img, n_img), </span><span style="color:#bf616a;">dtype</span><span>=np.uint16)
+</span></code></pre>
+<p>and then pick a seed:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span>tot_similarity_to_neighbors = np.</span><span style="color:#bf616a;">sort</span><span>(pairwise_similarity, </span><span style="color:#d08770;">0</span><span>)[-</span><span style="color:#d08770;">4</span><span>:].</span><span style="color:#bf616a;">sum</span><span>(</span><span style="color:#d08770;">0</span><span>)
+</span><span>seed_ind = np.</span><span style="color:#bf616a;">argmax</span><span>(tot_similarity_to_neighbors)
+</span><span>
+</span><span style="color:#65737e;"># Clear the similarities to the seed and all other tiles
+</span><span>pairwise_similarity[np.</span><span style="color:#bf616a;">arange</span><span>(n_tiles), seed_ind] = </span><span style="color:#d08770;">0
+</span><span>
+</span><span style="color:#65737e;"># Set the center index in the index map
+</span><span>c = n_img // </span><span style="color:#d08770;">2
+</span><span>ind_map[c, c] = seed_ind+</span><span style="color:#d08770;">1
+</span></code></pre>
+<p><code>tot_similarity_to_neighbors</code> is an array of the sum of similarties for each tile to its four closest neighbors. We then set the similarity of all other tiles to our seed to zero so we don't accidentally pick the seed again.</p>
+<p>Notice that we're starting indices at one so we can use zero as a marker that an index hasn't yes been filled.</p>
+<p>We'll then define a helper function to set a position <code>(x, y)</code> in the index map closest to <code>(xs, ys)</code>:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span style="color:#b48ead;">def </span><span style="color:#8fa1b3;">get_ind_at</span><span>(</span><span style="color:#bf616a;">ys</span><span>, </span><span style="color:#bf616a;">xs</span><span>, </span><span style="color:#bf616a;">y</span><span>, </span><span style="color:#bf616a;">x</span><span>):
+</span><span>    target_inds = ind_map[ys, xs]
+</span><span>
+</span><span>    </span><span style="color:#65737e;"># Bail if we haven&#39;t yet set the indices at ys and xs
+</span><span>    </span><span style="color:#b48ead;">if </span><span>(target_inds == </span><span style="color:#d08770;">0</span><span>).</span><span style="color:#bf616a;">sum</span><span>() &gt; </span><span style="color:#d08770;">0</span><span>: 
+</span><span>        </span><span style="color:#b48ead;">return
+</span><span>
+</span><span>    </span><span style="color:#65737e;"># Sum the similarity vectors for our two target indices
+</span><span>    similarities = pairwise_similarity[target_inds-</span><span style="color:#d08770;">1</span><span>].</span><span style="color:#bf616a;">sum</span><span>(</span><span style="color:#d08770;">0</span><span>)
+</span><span>
+</span><span>    </span><span style="color:#65737e;"># Bail if we have already invalidated the indices
+</span><span>    </span><span style="color:#b48ead;">if </span><span>similarities.</span><span style="color:#bf616a;">max</span><span>() == </span><span style="color:#d08770;">0</span><span>: 
+</span><span>        </span><span style="color:#b48ead;">return
+</span><span>
+</span><span>    </span><span style="color:#65737e;"># Get the most similar index
+</span><span>    chosen_ind = np.</span><span style="color:#bf616a;">argsort</span><span>(similarities)[-</span><span style="color:#d08770;">1</span><span>] + </span><span style="color:#d08770;">1
+</span><span>    ind_map[y, x] = chosen_ind
+</span><span>
+</span><span>    </span><span style="color:#65737e;"># Invalidate the index chosen
+</span><span>    pairwise_similarity[np.</span><span style="color:#bf616a;">arange</span><span>(n_tiles), chosen_ind-</span><span style="color:#d08770;">1</span><span>] = </span><span style="color:#d08770;">0
+</span></code></pre>
+<p>We then build at most <code>c</code> shells as described before or until all of the indices in the map are valid:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span>l = </span><span style="color:#d08770;">1
+</span><span>
+</span><span style="color:#b48ead;">while </span><span>l &lt; c and (ind_map &gt; </span><span style="color:#d08770;">0</span><span>).</span><span style="color:#bf616a;">sum</span><span>() &lt; n_tiles:
+</span><span>    </span><span style="color:#65737e;"># Get the four indices radially out in the current shell
+</span><span>    </span><span style="color:#bf616a;">get_ind_at</span><span>([c-l+</span><span style="color:#d08770;">1</span><span>], [c], c-l, c)
+</span><span>    </span><span style="color:#bf616a;">get_ind_at</span><span>([c+l-</span><span style="color:#d08770;">1</span><span>], [c], c+l, c)
+</span><span>    </span><span style="color:#bf616a;">get_ind_at</span><span>([c], [c+l-</span><span style="color:#d08770;">1</span><span>], c, c+l)
+</span><span>    </span><span style="color:#bf616a;">get_ind_at</span><span>([c], [c-l+</span><span style="color:#d08770;">1</span><span>], c, c-l)
+</span><span>
+</span><span>    </span><span style="color:#65737e;"># Build the top and bottom edges
+</span><span>    </span><span style="color:#b48ead;">for </span><span>dx </span><span style="color:#b48ead;">in </span><span style="color:#96b5b4;">range</span><span>(</span><span style="color:#d08770;">1</span><span>, l):
+</span><span>        </span><span style="color:#bf616a;">get_ind_at</span><span>([c-l, c-l+</span><span style="color:#d08770;">1</span><span>], [c+dx-</span><span style="color:#d08770;">1</span><span>, c+dx], c-l, c+dx)
+</span><span>        </span><span style="color:#bf616a;">get_ind_at</span><span>([c-l, c-l+</span><span style="color:#d08770;">1</span><span>], [c-dx+</span><span style="color:#d08770;">1</span><span>, c-dx], c-l, c-dx)
+</span><span>        </span><span style="color:#bf616a;">get_ind_at</span><span>([c+l, c+l-</span><span style="color:#d08770;">1</span><span>], [c+dx-</span><span style="color:#d08770;">1</span><span>, c+dx], c+l, c+dx)
+</span><span>        </span><span style="color:#bf616a;">get_ind_at</span><span>([c+l, c+l-</span><span style="color:#d08770;">1</span><span>], [c-dx+</span><span style="color:#d08770;">1</span><span>, c-dx], c+l, c-dx)
+</span><span>
+</span><span>    </span><span style="color:#65737e;"># Build the left and right edges
+</span><span>    </span><span style="color:#b48ead;">for </span><span>dy </span><span style="color:#b48ead;">in </span><span style="color:#96b5b4;">range</span><span>(</span><span style="color:#d08770;">1</span><span>, l):
+</span><span>        </span><span style="color:#bf616a;">get_ind_at</span><span>([c+dy-</span><span style="color:#d08770;">1</span><span>, c+dy], [c+l, c+l-</span><span style="color:#d08770;">1</span><span>], c+dy, c+l)
+</span><span>        </span><span style="color:#bf616a;">get_ind_at</span><span>([c-dy+</span><span style="color:#d08770;">1</span><span>, c-dy], [c+l, c+l-</span><span style="color:#d08770;">1</span><span>], c-dy, c+l)
+</span><span>        </span><span style="color:#bf616a;">get_ind_at</span><span>([c+dy-</span><span style="color:#d08770;">1</span><span>, c+dy], [c-l, c-l+</span><span style="color:#d08770;">1</span><span>], c+dy, c-l)
+</span><span>        </span><span style="color:#bf616a;">get_ind_at</span><span>([c-dy+</span><span style="color:#d08770;">1</span><span>, c-dy], [c-l, c-l+</span><span style="color:#d08770;">1</span><span>], c-dy, c-l)
+</span><span>
+</span><span>    </span><span style="color:#65737e;"># Get the indices at the corners
+</span><span>    </span><span style="color:#bf616a;">get_ind_at</span><span>([c-l, c-l+</span><span style="color:#d08770;">1</span><span>], [c+l-</span><span style="color:#d08770;">1</span><span>, c+l], c-l, c+l)
+</span><span>    </span><span style="color:#bf616a;">get_ind_at</span><span>([c+l, c+l-</span><span style="color:#d08770;">1</span><span>], [c+l-</span><span style="color:#d08770;">1</span><span>, c+l], c+l, c+l)
+</span><span>    </span><span style="color:#bf616a;">get_ind_at</span><span>([c+l, c+l-</span><span style="color:#d08770;">1</span><span>], [c-l+</span><span style="color:#d08770;">1</span><span>, c-l], c+l, c-l)
+</span><span>    </span><span style="color:#bf616a;">get_ind_at</span><span>([c-l, c-l+</span><span style="color:#d08770;">1</span><span>], [c-l+</span><span style="color:#d08770;">1</span><span>, c-l], c-l, c-l)
+</span><span>
+</span><span>    l += </span><span style="color:#d08770;">1
+</span></code></pre>
+<p>The final step is to take the index map and create the collage:</p>
+<pre data-lang="python" style="background-color:#2b303b;color:#c0c5ce;" class="language-python "><code class="language-python" data-lang="python"><span style="color:#b48ead;">from </span><span>skimage.io </span><span style="color:#b48ead;">import </span><span>imsave
+</span><span>
+</span><span>collage = np.</span><span style="color:#bf616a;">zeros</span><span>((n_img * </span><span style="color:#bf616a;">TILE_SIZE</span><span>, n_img * </span><span style="color:#bf616a;">TILE_SIZE</span><span>, </span><span style="color:#d08770;">3</span><span>), </span><span style="color:#bf616a;">dtype</span><span>=np.uint8)
+</span><span>
+</span><span style="color:#b48ead;">for </span><span>i, row </span><span style="color:#b48ead;">in </span><span style="color:#96b5b4;">enumerate</span><span>(ind_map):
+</span><span>    </span><span style="color:#b48ead;">for </span><span>j, ind </span><span style="color:#b48ead;">in </span><span style="color:#96b5b4;">enumerate</span><span>(row):
+</span><span>        </span><span style="color:#b48ead;">if </span><span>ind == </span><span style="color:#d08770;">0</span><span>: 
+</span><span>            </span><span style="color:#b48ead;">continue
+</span><span>
+</span><span>        collage[i*</span><span style="color:#bf616a;">TILE_SIZE</span><span>:(i+</span><span style="color:#d08770;">1</span><span>)*</span><span style="color:#bf616a;">TILE_SIZE</span><span>, j*</span><span style="color:#bf616a;">TILE_SIZE</span><span>:(j+</span><span style="color:#d08770;">1</span><span>)*</span><span style="color:#bf616a;">TILE_SIZE</span><span>] = tiles[ind-</span><span style="color:#d08770;">1</span><span>].</span><span style="color:#bf616a;">reshape</span><span>(</span><span style="color:#bf616a;">TILE_SIZE</span><span>, </span><span style="color:#bf616a;">TILE_SIZE</span><span>, </span><span style="color:#d08770;">3</span><span>)
+</span><span>
+</span><span style="color:#bf616a;">imsave</span><span>(&#39;</span><span style="color:#a3be8c;">collage.png</span><span>&#39;, collage)
+</span></code></pre>
+
+        </section>
+
+        
+
+    </article>
+</main>
+
+
+    </div>
+</body>
+
+</html>
