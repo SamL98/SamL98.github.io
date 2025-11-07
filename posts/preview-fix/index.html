@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    
+
+    
+    
+    
+    <title>
+         Fixing Other Peoples Software: Preview.app
+        
+    </title>
+
+        
+            <meta property="og:title" content="Fixing Other Peoples Software: Preview.app" />
+        
+     
+
+     
+         
+     
+
+     
+         
+    
+
+    
+    
+
+    
+    
+        <link href=https://saml98.github.io/fonts.css rel="stylesheet" />
+    
+
+    
+    
+
+
+    
+
+    
+    <link rel="alternate" type="application/atom+xml" title="Sam&#x27;s Internet Home" href="https://saml98.github.io/atom.xml">
+
+    
+    
+    
+        <link rel="stylesheet" type="text/css" href="https://saml98.github.io/theme/light.css"/>
+        <link rel="stylesheet" type="text/css" href="https://saml98.github.io/theme/dark.css" media="(prefers-color-scheme: dark)"/>
+    
+
+    
+        <script src=https://saml98.github.io/js/themetoggle.js></script>
+
+        
+            <script>
+                if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                    setTheme("dark");
+                } else {
+                    setTheme("light");
+                }
+            </script>
+        
+    
+
+    <link rel="stylesheet" type="text/css" media="screen" href=https://saml98.github.io/main.css />
+
+
+    
+</head>
+
+
+<script data-goatcounter="https://saml98.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
+
+<body>
+    <div class="content">
+        <header>
+    <div class="main">
+        <a href=https:&#x2F;&#x2F;saml98.github.io>Sam&#x27;s Internet Home</a>
+    </div>
+
+    <nav>
+        
+            <a href=&#x2F;posts style="margin-left: 0.7em">&#x2F;posts</a>
+        
+            <a href=&#x2F;projects style="margin-left: 0.7em">&#x2F;projects</a>
+        
+            <a href=&#x2F;about style="margin-left: 0.7em">&#x2F;about</a>
+        
+
+        
+    </nav>
+</header>
+
+
+        
+        
+    
+<main>
+    <article>
+        <div class="title">
+            
+            
+    <div class="page-header">
+        Fixing Other Peoples Software: Preview.app<span class="primary-color" style="font-size: 1.6em">.</span>
+    </div>
+
+
+                <div class="meta">
+                    
+                        Posted on <time>2025-11-06</time>
+                    
+
+                    
+                </div>
+        </div>
+
+        
+
+        
+        
+
+        <section class="body">
+            <h2 id="introduction">Introduction</h2>
+<p>Every now and then I find myself having to author a LaTeX document.
+Aside from the usual frustrations that come with writing LaTeX, I've come across a feature in Preview on MacOS that really bugs me.</p>
+<p>See, my LaTeX workflow is to have two windows side-by-side in full screen mode.
+On the left, I write the document in vim and manually compile it using <code>pdflatex</code> or <code>xelatex</code>.
+On the right, I have Preview open to look at the compiled PDF.</p>
+<p>Preview has a nice feature where it will update the display when the PDF I'm looking at changes (like when I recompile the tex).
+The bad part about this feature is that every time it updates, it opens the sidebar and resets the zoom.</p>
+<p float="middle" with="100%">
+  <img src="/orig_tex.png" alt="Original Display" width="42%" style="margin-left: 3%; margin-right: 3%" />
+  <img src="/post_tex.png" alt="Updated Display" width="42%" style="margin-left: 3%; margin-right: 3%" /> 
+</p>
+<p>Furthermore, the only way I've found to hide the sidebar is to toggle the &quot;Always Show Sidebar&quot; option twice.</p>
+<p>This annoys me so much that at one point I started using my web browser as my PDF viewer.
+The only problem with this was that it wouldn't auto-update on recompiling so I would have to manually refresh the page.</p>
+<p>Eventually, I decided that, hey, I can use <a href="https://frida.re/">frida</a>, let's see if I can quickly fix this issue.</p>
+<h3 id="sidebar">Sidebar</h3>
+<p>The first, and more annoying, issue that I'll tackle is the sidebar opening.</p>
+<p>To start, I figured I'd just see what sidebar-related functions, if any, are being called when the view updates.
+Being a MacOS application and written more than five years ago, I figured there's a good chance it was written at least partially in Objective-C
+so I ran the following command:</p>
+<p><code>frida-trace -p &lt;PID of Preview&gt; -m &quot;-[* *Sidebar:*]&quot; | tee log.txt</code></p>
+<p>This tells <code>frida-trace</code> to log whenever a method on any class containing the substring &quot;Sidebar&quot; is called.</p>
+<p>Looking through the log, one method stands out:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span> 13838 ms  -[PVFullScreenController setAutohidesSidebar:0x1]
+</span></code></pre>
+<p>Seems promising.
+Just logging this method and manually unchecking and checking the &quot;Always Show Sidebar&quot; option gives the following:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>  3813 ms  -[PVFullScreenController setAutohidesSidebar:0x0]
+</span><span>  6365 ms  -[PVFullScreenController setAutohidesSidebar:0x1]
+</span></code></pre>
+<p>Let's try stubbing out this function to see if it disables the sidebar.</p>
+<p>To do so, we can create the following frida script:</p>
+<pre data-lang="javascript" style="background-color:#2b303b;color:#c0c5ce;" class="language-javascript "><code class="language-javascript" data-lang="javascript"><span style="color:#b48ead;">var </span><span style="color:#bf616a;">cls </span><span>= </span><span style="color:#bf616a;">ObjC</span><span>.classes[&#39;</span><span style="color:#a3be8c;">PVFullScreenController</span><span>&#39;];
+</span><span style="color:#b48ead;">var </span><span style="color:#bf616a;">meth </span><span>= </span><span style="color:#bf616a;">cls</span><span>.</span><span style="color:#8fa1b3;">instanceMethodForSelector_</span><span>(</span><span style="color:#bf616a;">ObjC</span><span>.</span><span style="color:#8fa1b3;">selector</span><span>(&#39;</span><span style="color:#a3be8c;">setAutohidesSidebar:</span><span>&#39;))
+</span><span>
+</span><span style="color:#b48ead;">var </span><span style="color:#bf616a;">newImp </span><span>= new NativeCallback(</span><span style="color:#b48ead;">function </span><span>(</span><span style="color:#bf616a;">self</span><span>, </span><span style="color:#bf616a;">_cmd</span><span>, </span><span style="color:#bf616a;">autohides</span><span>) {
+</span><span>    </span><span style="color:#ebcb8b;">console</span><span>.</span><span style="color:#96b5b4;">log</span><span>(&#39;</span><span style="color:#a3be8c;">Stubbing -[PVFullScreenController setAutohidesSidebar:</span><span>&#39; + </span><span style="color:#bf616a;">autohides </span><span>+ &#39;</span><span style="color:#a3be8c;">]</span><span>&#39;);
+</span><span>    </span><span style="color:#b48ead;">return</span><span>;
+</span><span>}, &#39;</span><span style="color:#a3be8c;">void</span><span>&#39;, [&#39;</span><span style="color:#a3be8c;">pointer</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">pointer</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">char</span><span>&#39;]);
+</span><span>
+</span><span style="color:#bf616a;">Interceptor</span><span>.</span><span style="color:#96b5b4;">replace</span><span>(</span><span style="color:#bf616a;">meth</span><span>, </span><span style="color:#bf616a;">newImp</span><span>);
+</span></code></pre>
+<p>Where we could infer the method signature but confirmed it using <code>otool -ov &lt;path to Preview&gt;</code> and seeing that the <code>setAutohidesSidebar</code> method doesn't return anything and takes a char (boolean):</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>    ...
+</span><span>    name    0x1001c57ab setAutohidesSidebarInFullscreen:
+</span><span>    types   0x1001d797c v20@0:8c16
+</span><span>    ...
+</span></code></pre>
+<p>Unpacking this type signature:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>    v  -- Method returns void (nothing).
+</span><span>    20 -- Parameters take 20 bytes in total.
+</span><span>    @  -- The first parameter is a pointer to an Objective-C object.
+</span><span>    0  -- The first parameter is at offset 0.
+</span><span>    :  -- The second parameter is an Objective-C selector.
+</span><span>    8  -- This parameter is at offset 8.
+</span><span>    c  -- The third parameter is a char.
+</span><span>    16 -- It&#39;s at offset 16.
+</span></code></pre>
+<p>Running this and manually toggling &quot;Always Show Sidebar&quot; doesn't show the sidebar so the script correctly stubbed the functionality:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>Stubbing -[PVFullScreenController setAutohidesSidebar:0]
+</span><span>Stubbing -[PVFullScreenController setAutohidesSidebar:0]
+</span></code></pre>
+<p>Note that both times the <code>autohides</code> parameter is 0 since the first time it was called, we stubbed it out and didn't update its internal state (most likely).</p>
+<p>This seems like a win but re-compiling the PDF, we see the method called with the <code>TRUE</code> parameter and the sidebar appears:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>Stubbing -[PVFullScreenController setAutohidesSidebar:1]
+</span><span>Stubbing -[PVFullScreenController setAutohidesSidebar:1]
+</span></code></pre>
+<p>Therefore, the code that actually opens the sidebar must be handled in a different branch of the call tree.
+To figure out where the sidebar is actually opened, let's print out the stack trace every time the method is called:</p>
+<pre data-lang="javascript" style="background-color:#2b303b;color:#c0c5ce;" class="language-javascript "><code class="language-javascript" data-lang="javascript"><span style="color:#65737e;">// within the NativeCallback...
+</span><span style="color:#ebcb8b;">console</span><span>.</span><span style="color:#96b5b4;">log</span><span>(</span><span style="color:#bf616a;">Thread</span><span>.</span><span style="color:#8fa1b3;">backtrace</span><span>(</span><span style="color:#bf616a;">this</span><span>.</span><span style="color:#bf616a;">context</span><span>, </span><span style="color:#bf616a;">Backtracer</span><span>.</span><span style="color:#bf616a;">ACCURATE</span><span>)
+</span><span>    .</span><span style="color:#8fa1b3;">map</span><span>(</span><span style="color:#bf616a;">DebugSymbol</span><span>.</span><span style="color:#bf616a;">fromAddress</span><span>).</span><span style="color:#96b5b4;">join</span><span>(&#39;</span><span style="color:#96b5b4;">\n</span><span>&#39;) + &#39;</span><span style="color:#96b5b4;">\n</span><span>&#39;);
+</span></code></pre>
+<p>We can see that</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>// On manually toggle.
+</span><span>Stubbing -[PVFullScreenController setAutohidesSidebar:0]
+</span><span>0x10c3c19db /System/Applications/Preview.app/Contents/MacOS/Preview!-[PVWindowController toggleAutohidesSidebar:]
+</span><span>0x10c3c4429 /System/Applications/Preview.app/Contents/MacOS/Preview!-[PVWindowController toggleHideSidebar:]
+</span><span>0x7ff8130a808e AppKit!-[NSApplication(NSResponder) sendAction:to:from:]
+</span><span>0x7ff81319cc10 AppKit!-[NSMenuItem _corePerformAction]
+</span><span>...
+</span><span>
+</span><span>// On auto update.
+</span><span>Stubbing -[PVFullScreenController setAutohidesSidebar:1]
+</span><span>0x10c47a1c3 /System/Applications/Preview.app/Contents/MacOS/Preview!-[PVWindowController syncViewStateFromMediaContainer:includingLocation:]
+</span><span>0x10c3a3175 /System/Applications/Preview.app/Contents/MacOS/Preview!-[PVWindowController observeValueForKeyPath:ofObject:change:context:]
+</span><span>0x7ff81129816a Foundation!NSKeyValueNotifyObserver
+</span><span>0x7ff81135c069 Foundation!NSKeyValueDidChange
+</span><span>0x7ff81128ac8e Foundation!-[NSObject(NSKeyValueObservingPrivate) _changeValueForKeys:count:maybeOldValuesDict:maybeNewValuesDict:usingBlock:]
+</span><span>0x7ff8112b6122 Foundation!-[NSObject(NSKeyValueObservingPrivate) _changeValueForKey:key:key:usingBlock:]
+</span><span>0x7ff8112b87b7 Foundation!_NSSetCharValueAndNotify
+</span><span>0x10c39c411 /System/Applications/Preview.app/Contents/MacOS/Preview!-[PVPDFPageContainer validateSource:]
+</span><span>0x10c39a3ab /System/Applications/Preview.app/Contents/MacOS/Preview!-[PVPDFPageContainer readFromURL:ofType:error:]
+</span><span>0x7ff8133c7c7b AppKit!-[NSDocument revertToContentsOfURL:ofType:error:]
+</span><span>0x10c400fe4 /System/Applications/Preview.app/Contents/MacOS/Preview!-[PVMediaContainerBase revertToContentsOfURL:ofType:error:]
+</span><span>...
+</span><span>
+</span><span>// On auto update.
+</span><span>Stubbing -[PVFullScreenController setAutohidesSidebar:1]
+</span><span>0x10c47a1c3 /System/Applications/Preview.app/Contents/MacOS/Preview!-[PVWindowController syncViewStateFromMediaContainer:includingLocation:]
+</span><span>0x10c3b05d2 /System/Applications/Preview.app/Contents/MacOS/Preview!-[PVWindowController didRevertContainer:]
+</span><span>0x10c401089 /System/Applications/Preview.app/Contents/MacOS/Preview!-[PVMediaContainerBase revertToContentsOfURL:ofType:error:]
+</span><span>...
+</span></code></pre>
+<p>I didn't see what looked like the function call in the <code>syncViewState...</code> method but after some digging I found the selector
+<code>openSidebarWithAnimation:completionHandler:</code> which is called from the method <code>-[PVWindowController _setupUtilityView]</code>:</p>
+<pre data-lang="Objective-C" style="background-color:#2b303b;color:#c0c5ce;" class="language-Objective-C "><code class="language-Objective-C" data-lang="Objective-C"><span>int64_t -[PVWindowController </span><span style="color:#8fa1b3;">_setupUtilityView</span><span>]
+</span><span>  ...
+</span><span>  </span><span style="color:#b48ead;">if </span><span>(rax == </span><span style="color:#d08770;">5 </span><span>|| rax == </span><span style="color:#d08770;">6 </span><span>|| rax == </span><span style="color:#d08770;">7</span><span>)
+</span><span>  {
+</span><span>      ...
+</span><span>      rax_12 = &amp;openSidebarSelector
+</span><span>  }
+</span><span>  ...
+</span><span>  </span><span style="color:#b48ead;">if </span><span>(rax == </span><span style="color:#d08770;">7 </span><span>|| rax == </span><span style="color:#d08770;">5 </span><span>|| rax == </span><span style="color:#d08770;">6 </span><span>|| rax u&gt; </span><span style="color:#d08770;">8 </span><span>|| rax == </span><span style="color:#d08770;">0 </span><span>|| rax == </span><span style="color:#d08770;">8</span><span>)
+</span><span>  {
+</span><span>      </span><span style="color:#bf616a;">_objc_msgSend</span><span>(rbx, *rax_12)
+</span><span>      ...
+</span><span>  }
+</span></code></pre>
+<p>which is in turn called from <code>-[PVWindowController didRevertContainer:]</code>:</p>
+<pre data-lang="Objective-C" style="background-color:#2b303b;color:#c0c5ce;" class="language-Objective-C "><code class="language-Objective-C" data-lang="Objective-C"><span>int64_t </span><span style="color:#8fa1b3;">didRevertContainer</span><span>(</span><span style="color:#b48ead;">void</span><span>* </span><span style="color:#bf616a;">arg1</span><span>, int64_t </span><span style="color:#bf616a;">arg2</span><span>, int64_t </span><span style="color:#bf616a;">arg3</span><span>)
+</span><span>    int64_t rax = </span><span style="color:#bf616a;">_objc_retain</span><span>(arg3)
+</span><span>    int64_t rax_2 = </span><span style="color:#bf616a;">_objc_retainAutoreleasedReturnValue</span><span>(</span><span style="color:#bf616a;">_objc_msgSend</span><span>(arg1, &quot;</span><span style="color:#a3be8c;">currentMediaContainer</span><span>&quot;))
+</span><span>    </span><span style="color:#bf616a;">_objc_release</span><span>(rax_2)
+</span><span>    </span><span style="color:#8fa1b3;">if </span><span>(rax_2 == </span><span style="color:#bf616a;">rax</span><span>)
+</span><span>    {
+</span><span>        </span><span style="color:#bf616a;">_objc_msgSend</span><span>(arg1, &quot;</span><span style="color:#a3be8c;">initializeViewStateOnMediaContai…</span><span>&quot;)
+</span><span>        </span><span style="color:#bf616a;">_objc_msgSend</span><span>(arg1, &quot;</span><span style="color:#a3be8c;">syncViewStateFromMediaContainer:…</span><span>&quot;)
+</span><span>        *(arg1 + data_100268ab0) = </span><span style="color:#d08770;">0
+</span><span>    }
+</span><span>    </span><span style="color:#bf616a;">_objc_msgSend</span><span>(rax, &quot;</span><span style="color:#a3be8c;">setHasNeverBeenEdited:</span><span>&quot;)
+</span><span>    </span><span style="color:#8fa1b3;">_objc_msgSend</span><span>(</span><span style="color:#bf616a;">arg1</span><span>, &quot;</span><span style="color:#a3be8c;">_setupUtilityView</span><span>&quot;)
+</span><span>    </span><span style="color:#bf616a;">_objc_msgSend</span><span>(arg1, &quot;</span><span style="color:#a3be8c;">updateCurrentPageNumberUI</span><span>&quot;)
+</span><span>    </span><span style="color:#bf616a;">_objc_msgSend</span><span>(*(arg1 + data_100268b10), &quot;</span><span style="color:#a3be8c;">setNeedsDisplay:</span><span>&quot;)
+</span><span>    return </span><span style="color:#8fa1b3;">_objc_release</span><span>(</span><span style="color:#bf616a;">rax</span><span>) __tailcall
+</span></code></pre>
+<p>Stubbing the <code>openSidebar...</code> method finally correctly disables the sidebar.</p>
+<p>To make this even better, we can stub only calls to <code>openSidebar...</code> from <code>_setupUtilityView</code> so that if we want, we can manually show the sidebar.
+Here is the final frida script for the sidebar:</p>
+<pre data-lang="javascript" style="background-color:#2b303b;color:#c0c5ce;" class="language-javascript "><code class="language-javascript" data-lang="javascript"><span style="color:#b48ead;">var </span><span style="color:#bf616a;">cls </span><span>= </span><span style="color:#bf616a;">ObjC</span><span>.classes[&#39;</span><span style="color:#a3be8c;">PVWindowController</span><span>&#39;];
+</span><span style="color:#b48ead;">var </span><span style="color:#bf616a;">meth </span><span>= </span><span style="color:#bf616a;">cls</span><span>.</span><span style="color:#8fa1b3;">instanceMethodForSelector_</span><span>(</span><span style="color:#bf616a;">ObjC</span><span>.</span><span style="color:#8fa1b3;">selector</span><span>(&#39;</span><span style="color:#a3be8c;">openSidebarWithAnimation:completionHandler:</span><span>&#39;))
+</span><span style="color:#b48ead;">var </span><span style="color:#bf616a;">orig </span><span>= new NativeFunction(</span><span style="color:#bf616a;">meth</span><span>, &#39;</span><span style="color:#a3be8c;">void</span><span>&#39;, [&#39;</span><span style="color:#a3be8c;">pointer</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">pointer</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">pointer</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">pointer</span><span>&#39;]);
+</span><span>
+</span><span style="color:#b48ead;">var </span><span style="color:#bf616a;">newImpl </span><span>= new NativeCallback(</span><span style="color:#b48ead;">function </span><span>(</span><span style="color:#bf616a;">self</span><span>, </span><span style="color:#bf616a;">_cmd</span><span>, </span><span style="color:#bf616a;">animation</span><span>, </span><span style="color:#bf616a;">callback</span><span>) {
+</span><span>    </span><span style="color:#b48ead;">var </span><span style="color:#bf616a;">bt </span><span>= </span><span style="color:#bf616a;">Thread</span><span>.</span><span style="color:#8fa1b3;">backtrace</span><span>(</span><span style="color:#bf616a;">this</span><span>.</span><span style="color:#bf616a;">context</span><span>, </span><span style="color:#bf616a;">Backtracer</span><span>.</span><span style="color:#bf616a;">ACCURATE</span><span>);
+</span><span>    </span><span style="color:#b48ead;">var </span><span style="color:#bf616a;">callingFunc </span><span>= &#39;&#39; + </span><span style="color:#bf616a;">DebugSymbol</span><span>.</span><span style="color:#8fa1b3;">fromAddress</span><span>(</span><span style="color:#bf616a;">bt</span><span>[</span><span style="color:#d08770;">0</span><span>]);
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">if </span><span>(</span><span style="color:#bf616a;">callingFunc</span><span>.</span><span style="color:#96b5b4;">indexOf</span><span>(&#39;</span><span style="color:#a3be8c;">-[PVWindowController _setupUtilityView]</span><span>&#39;) &gt;= </span><span style="color:#d08770;">0</span><span>) {
+</span><span>        </span><span style="color:#ebcb8b;">console</span><span>.</span><span style="color:#96b5b4;">log</span><span>(&#39;</span><span style="color:#a3be8c;">Stubbing showSidebar</span><span>&#39;);
+</span><span>        </span><span style="color:#b48ead;">return</span><span>;
+</span><span>    } </span><span style="color:#b48ead;">else </span><span>{
+</span><span>        </span><span style="color:#8fa1b3;">orig</span><span>(</span><span style="color:#bf616a;">self</span><span>, </span><span style="color:#bf616a;">_cmd</span><span>, </span><span style="color:#bf616a;">animation</span><span>, </span><span style="color:#bf616a;">callback</span><span>);
+</span><span>        </span><span style="color:#b48ead;">return</span><span>;
+</span><span>    }
+</span><span>}, &#39;</span><span style="color:#a3be8c;">void</span><span>&#39;, [&#39;</span><span style="color:#a3be8c;">pointer</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">pointer</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">pointer</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">pointer</span><span>&#39;]);
+</span><span>
+</span><span style="color:#bf616a;">Interceptor</span><span>.</span><span style="color:#96b5b4;">replace</span><span>(</span><span style="color:#bf616a;">meth</span><span>, </span><span style="color:#bf616a;">newImpl</span><span>);
+</span></code></pre>
+<h3 id="zoom">Zoom</h3>
+<p>Looking at the decompilation for the <code>syncViewState...</code> method, we see some interesting-looking method calls:</p>
+<pre data-lang="Objective-C" style="background-color:#2b303b;color:#c0c5ce;" class="language-Objective-C "><code class="language-Objective-C" data-lang="Objective-C"><span>    ...
+</span><span>            </span><span style="color:#b48ead;">if </span><span>(arg4.</span><span style="color:#bf616a;">b </span><span>!= </span><span style="color:#d08770;">0</span><span>)
+</span><span>            {
+</span><span>                zmm0_6 = </span><span style="color:#bf616a;">_objc_msgSend</span><span>(rax, &quot;</span><span style="color:#a3be8c;">zoomCenter</span><span>&quot;)
+</span><span>                zmm0_6 - </span><span style="color:#d08770;">9.2233720368547758e+18
+</span><span>                </span><span style="color:#b48ead;">if </span><span>(zmm0_6 != </span><span style="color:#d08770;">9.2233720368547758e+18 </span><span>|| (</span><span style="color:#bf616a;">not</span><span>(zmm0_6 != </span><span style="color:#d08770;">9.2233720368547758e+18</span><span>) &amp;&amp; </span><span style="color:#bf616a;">not</span><span>(is_ordered.</span><span style="color:#bf616a;">q</span><span>(zmm0_6, </span><span style="color:#d08770;">9.2233720368547758e+18</span><span>))))
+</span><span>                {
+</span><span>                    </span><span style="color:#bf616a;">_objc_msgSend</span><span>(rax, &quot;</span><span style="color:#a3be8c;">uiZoomFactor</span><span>&quot;)
+</span><span>                    r12_3 = var_50_1
+</span><span>                    var_40_1.</span><span style="color:#bf616a;">q </span><span>= </span><span style="color:#bf616a;">_objc_msgSend</span><span>(r12_3, &quot;</span><span style="color:#a3be8c;">zoomFactorForUIZoomFactor:</span><span>&quot;)
+</span><span>                    </span><span style="color:#bf616a;">_objc_msgSend</span><span>(rax, &quot;</span><span style="color:#a3be8c;">zoomCenter</span><span>&quot;)
+</span><span>                    </span><span style="color:#bf616a;">_objc_msgSend</span><span>(r12_3, &quot;</span><span style="color:#a3be8c;">setZoomFactor:withCenter:animate…</span><span>&quot;)
+</span><span>                }
+</span><span>            }
+</span><span>            </span><span style="color:#b48ead;">if </span><span>(arg4.</span><span style="color:#bf616a;">b </span><span>== </span><span style="color:#d08770;">0 </span><span>|| (arg4.</span><span style="color:#bf616a;">b </span><span>!= </span><span style="color:#d08770;">0 </span><span>&amp;&amp; </span><span style="color:#bf616a;">not</span><span>(zmm0_6 != </span><span style="color:#d08770;">9.2233720368547758e+18</span><span>) &amp;&amp; is_ordered.</span><span style="color:#bf616a;">q</span><span>(zmm0_6, </span><span style="color:#d08770;">9.2233720368547758e+18</span><span>)))
+</span><span>            {
+</span><span>                </span><span style="color:#bf616a;">_objc_msgSend</span><span>(rax, &quot;</span><span style="color:#a3be8c;">uiZoomFactor</span><span>&quot;)
+</span><span>                r12_3 = var_50_1
+</span><span>                </span><span style="color:#bf616a;">_objc_msgSend</span><span>(r12_3, &quot;</span><span style="color:#a3be8c;">zoomFactorForUIZoomFactor:</span><span>&quot;)
+</span><span>                </span><span style="color:#bf616a;">_objc_msgSend</span><span>(r12_3, &quot;</span><span style="color:#a3be8c;">setZoomFactor:animate:stickyFit:</span><span>&quot;)
+</span><span>            }
+</span><span>    ...
+</span></code></pre>
+<p>Specifically these <code>setZoomFactor...</code> methods seem like good candidates for setting the zoom since... yknow... it's in the name.</p>
+<p>Checking with <code>frida-trace</code> to see if these methods are called, we see that <code>setZoomFactor:withCenter...</code> is the one that's called.
+Therefore, we can create the following frida hook to stub out the zooming functionality in the correct context:</p>
+<pre data-lang="javascript" style="background-color:#2b303b;color:#c0c5ce;" class="language-javascript "><code class="language-javascript" data-lang="javascript"><span style="color:#b48ead;">var </span><span style="color:#bf616a;">cls </span><span>= </span><span style="color:#bf616a;">ObjC</span><span>.classes[&#39;</span><span style="color:#a3be8c;">PVPDFView</span><span>&#39;];
+</span><span style="color:#b48ead;">var </span><span style="color:#bf616a;">meth </span><span>= </span><span style="color:#bf616a;">cls</span><span>.</span><span style="color:#8fa1b3;">instanceMethodForSelector_</span><span>(</span><span style="color:#bf616a;">ObjC</span><span>.</span><span style="color:#8fa1b3;">selector</span><span>(&#39;</span><span style="color:#a3be8c;">setZoomFactor:withCenter:animate:stickyFit:completion:</span><span>&#39;))
+</span><span style="color:#b48ead;">var </span><span style="color:#bf616a;">orig </span><span>= new NativeFunction(</span><span style="color:#bf616a;">meth</span><span>, &#39;</span><span style="color:#a3be8c;">void</span><span>&#39;, [&#39;</span><span style="color:#a3be8c;">pointer</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">pointer</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">double</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">double</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">double</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">char</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">char</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">pointer</span><span>&#39;]);
+</span><span>
+</span><span style="color:#b48ead;">var </span><span style="color:#bf616a;">newImpl </span><span>= new NativeCallback(</span><span style="color:#b48ead;">function </span><span>(</span><span style="color:#bf616a;">self</span><span>, </span><span style="color:#bf616a;">_cmd</span><span>, </span><span style="color:#bf616a;">factor</span><span>, </span><span style="color:#bf616a;">x</span><span>, </span><span style="color:#bf616a;">y</span><span>, </span><span style="color:#bf616a;">animate</span><span>, </span><span style="color:#bf616a;">sticky</span><span>, </span><span style="color:#bf616a;">completion</span><span>) {
+</span><span>    </span><span style="color:#b48ead;">var </span><span style="color:#bf616a;">bt </span><span>= </span><span style="color:#bf616a;">Thread</span><span>.</span><span style="color:#8fa1b3;">backtrace</span><span>(</span><span style="color:#bf616a;">this</span><span>.</span><span style="color:#bf616a;">context</span><span>, </span><span style="color:#bf616a;">Backtracer</span><span>.</span><span style="color:#bf616a;">ACCURATE</span><span>);
+</span><span>    </span><span style="color:#b48ead;">var </span><span style="color:#bf616a;">callingFunc </span><span>= &#39;&#39; + </span><span style="color:#bf616a;">DebugSymbol</span><span>.</span><span style="color:#8fa1b3;">fromAddress</span><span>(</span><span style="color:#bf616a;">bt</span><span>[</span><span style="color:#d08770;">0</span><span>]);
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">if </span><span>(</span><span style="color:#bf616a;">callingFunc</span><span>.</span><span style="color:#96b5b4;">indexOf</span><span>(&#39;</span><span style="color:#a3be8c;">-[PVWindowController syncViewStateFromMediaContainer:includingLocation:]</span><span>&#39;) &gt;= </span><span style="color:#d08770;">0</span><span>) {
+</span><span>        </span><span style="color:#ebcb8b;">console</span><span>.</span><span style="color:#96b5b4;">log</span><span>(&#39;</span><span style="color:#a3be8c;">Stubbing setZoom</span><span>&#39;);
+</span><span>        </span><span style="color:#b48ead;">return</span><span>;
+</span><span>    } </span><span style="color:#b48ead;">else </span><span>{
+</span><span>        </span><span style="color:#8fa1b3;">orig</span><span>(</span><span style="color:#bf616a;">self</span><span>, </span><span style="color:#bf616a;">_cmd</span><span>, </span><span style="color:#bf616a;">factor</span><span>, </span><span style="color:#bf616a;">x</span><span>, </span><span style="color:#bf616a;">y</span><span>, </span><span style="color:#bf616a;">animate</span><span>, </span><span style="color:#bf616a;">sticky</span><span>, </span><span style="color:#bf616a;">completion</span><span>);
+</span><span>        </span><span style="color:#b48ead;">return</span><span>;
+</span><span>    }
+</span><span>}, &#39;</span><span style="color:#a3be8c;">void</span><span>&#39;, [&#39;</span><span style="color:#a3be8c;">pointer</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">pointer</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">double</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">double</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">double</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">char</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">char</span><span>&#39;, &#39;</span><span style="color:#a3be8c;">pointer</span><span>&#39;]);
+</span><span>
+</span><span style="color:#bf616a;">Interceptor</span><span>.</span><span style="color:#96b5b4;">replace</span><span>(</span><span style="color:#bf616a;">meth</span><span>, </span><span style="color:#bf616a;">newImpl</span><span>);
+</span></code></pre>
+<h2 id="conclusion">Conclusion</h2>
+<p>There's still a slight annoyance that on auto-update the scroll offset is reset to (0, 0) within the current page but this really doesn't annoy me too much.</p>
+<p>Anyways, I hope this shows how you too can fix annoyances or bugs in software by using frida and maybe a decompiler.</p>
+
+        </section>
+
+        
+
+    </article>
+</main>
+
+
+    </div>
+</body>
+
+</html>

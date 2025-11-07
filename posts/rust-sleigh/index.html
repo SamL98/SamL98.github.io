@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    
+
+    
+    
+    
+    <title>
+         Notes on Implementing SLEIGH
+        
+    </title>
+
+        
+            <meta property="og:title" content="Notes on Implementing SLEIGH" />
+        
+     
+
+     
+         
+     
+
+     
+         
+    
+
+    
+    
+
+    
+    
+        <link href=https://saml98.github.io/fonts.css rel="stylesheet" />
+    
+
+    
+    
+
+
+    
+
+    
+    <link rel="alternate" type="application/atom+xml" title="Sam&#x27;s Internet Home" href="https://saml98.github.io/atom.xml">
+
+    
+    
+    
+        <link rel="stylesheet" type="text/css" href="https://saml98.github.io/theme/light.css"/>
+        <link rel="stylesheet" type="text/css" href="https://saml98.github.io/theme/dark.css" media="(prefers-color-scheme: dark)"/>
+    
+
+    
+        <script src=https://saml98.github.io/js/themetoggle.js></script>
+
+        
+            <script>
+                if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                    setTheme("dark");
+                } else {
+                    setTheme("light");
+                }
+            </script>
+        
+    
+
+    <link rel="stylesheet" type="text/css" media="screen" href=https://saml98.github.io/main.css />
+
+
+    
+</head>
+
+
+<script data-goatcounter="https://saml98.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
+
+<body>
+    <div class="content">
+        <header>
+    <div class="main">
+        <a href=https:&#x2F;&#x2F;saml98.github.io>Sam&#x27;s Internet Home</a>
+    </div>
+
+    <nav>
+        
+            <a href=&#x2F;posts style="margin-left: 0.7em">&#x2F;posts</a>
+        
+            <a href=&#x2F;projects style="margin-left: 0.7em">&#x2F;projects</a>
+        
+            <a href=&#x2F;about style="margin-left: 0.7em">&#x2F;about</a>
+        
+
+        
+    </nav>
+</header>
+
+
+        
+        
+    
+<main>
+    <article>
+        <div class="title">
+            
+            
+    <div class="page-header">
+        Notes on Implementing SLEIGH<span class="primary-color" style="font-size: 1.6em">.</span>
+    </div>
+
+
+                <div class="meta">
+                    
+                        Posted on <time>2025-10-28</time>
+                    
+
+                    
+                </div>
+        </div>
+
+        
+
+        
+        
+
+        <section class="body">
+            <h2 id="introduction">Introduction</h2>
+<p>I recently open-sourced <a href="https://github.com/SamL98/rust-sleigh">my implementation</a> of a <a href="https://ghidra.re/ghidra_docs/languages/html/sleigh.html">SLEIGH</a> lifter and given that there's no documentation for how this stuff works, I figured I'd share a bit.</p>
+<h2 id="sleigh">SLEIGH</h2>
+<p>SLEIGH is a domain-specific language for generating programs which take machine code and output an intermediate representation (IR) -- referred to as a lifter.
+Or rather, when compiled, a SLEIGH specification generates a large XML file defining the instructions, registers, and other aspects of a processor.</p>
+<p>This XML file is basically a program which tells the interpreter (described here) how to process the raw bytes.
+If you're confused, good. So am I. We've very quickly reached the level of turing machines running turing machines.
+Hopefully as this article goes on, things will become clearer.</p>
+<h3 id="specification-language">Specification Language</h3>
+<p>To get a feel for the SLEIGH concepts, let's look at the specification before compiling and see how the byte 0x55 will be lifted for the x86-64 architecture (<code>PUSH RBP</code>)</p>
+<p>If you go into Ghidra, disassemble an x86-64 binary, find a <code>PUSH RBP</code> instruction, right click on it, and select &quot;Instruction Info&quot;, you'll see some useful information about how the instruction was lifted.</p>
+<p>Namely, on the left, there shold be a section titled &quot;Constructor Line #'s&quot; and underneat it should say <code>PUSH(ia.sinc:3380)</code>, <code>Rmr64(ia.sinc:604)</code> (the line numbers might differ based on your version of Ghidra).</p>
+<p>If we open the file <code>$GHIDRA_PATH/Ghidra/Processors/x86/data/languages/ia.sinc</code> and go to line 3380, we see the following (re-formatted for nicer reading):</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>:PUSH Rmr64 is $(LONGMODE_ON) &amp; vexMode=0 &amp; addrsize=2 &amp; row=5 &amp; page=0 &amp; Rmr64 {
+</span><span>    push88(Rmr64);
+</span><span>}
+</span></code></pre>
+<p>This line, like the instruction info was telling us, is a constructor.
+At its most basic level, a constructor is telling the lifter what IR operations to emit when a specific bit pattern is seen.</p>
+<p>Each constructor is made composed like so:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>&lt;table&gt;:&lt;display&gt; is &lt;pattern&gt; {
+</span><span>    &lt;semantic&gt;
+</span><span>}
+</span></code></pre>
+<p><code>&lt;table&gt;</code> is used for grouping constructors with different bit patterns into the same logical unit (more on this in a moment).
+In the case of <code>PUSH</code>, the <code>&lt;table&gt;</code> is empty, meaning that the constructor is part of the root, <code>instruction</code> table.</p>
+<p>The <code>&lt;display&gt;</code> section defines how the disassembled instruction should be rendered to text.
+In the case of <code>PUSH Rmr64</code>, each operand will be recursively expanded using their own display sections (e.g. <code>Rmr64</code> -&gt; <code>RBP</code>) and finally concatenated together into <code>PUSH RBP</code>.</p>
+<p>The <code>&lt;pattern&gt;</code> section defines the bit pattern that matches the constuctor.
+Similar to the display section, the patterns of the operands (<code>Rmr64</code>) are also recursively expanded and concatenated into the whole bit pattern.
+The rest of the variables in the bit pattern (i.e. <code>vexMode</code> or <code>row</code>) are aliases to bit ranges in either the disassembly context or the raw machine code bytes. </p>
+<p>Finally, the <code>&lt;semantic&gt;</code> section says which p-code ops to emit for the disassembled instruction.
+In this case, <code>push88</code> is actually a p-code macro so the emitted ops will actually be:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>mysave:8 = Rmr64;
+</span><span>RSP = RSP - 8;
+</span><span>*:8 RSP = mysave;
+</span></code></pre>
+<p>Now taking a look at the second constructor, we see:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>Rmr64: r64 is rexBprefix=0 &amp; r64 {
+</span><span>    export r64;
+</span><span>}
+</span></code></pre>
+<p>The first thing to notice is that this constructor is part of the <code>Rmr64</code> table.
+Looking at the next line in the sinc file, we see the other constructor in the table.</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>Rmr64: r64_x is rexBprefix=1 &amp; r64_x {
+</span><span>    export r64_x;
+</span><span>}
+</span></code></pre>
+<p>Therefore, the table mechanism is sort of a way of doing polymorphism on the operands.
+The <code>PUSH</code> constructor can reference the <code>Rmr64</code> table without caring if <code>rexBprefix</code> is set or not.</p>
+<p>The semantic sections of these constructors also just use the <code>export</code> statement.
+This won't actually be emitted in the p-code, it is just telling the SLEIGH interpreter to use the value of <code>r64</code> or <code>r64_x</code> when <code>Rmr64</code> is referenced in the semantic section of any parent constructor.</p>
+<p>Finally, if we look further up in the file, we see the line:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>attach variables [ r64 reg64 base64 index64 ] [ RAX RCX RDX RBX RSP RBP RSI RDI ];
+</span></code></pre>
+<p>This means that when we use the value of <code>r64</code> (or <code>reg64</code> or <code>base64</code> or <code>index64</code>), we are actually referencing the register at that index in the given array.
+That's why in our instruction where <code>r64</code> is 5, we are referencing <code>RBP</code>.</p>
+<p><code>r64_x</code> is attached in a similar way to reference a different list of registers:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>attach variables [ r64_x reg64_x base64_x index64_x ] [ R8 R9 R10 R11 R12 R13 R14 R15 ];
+</span></code></pre>
+<h3 id="compilation">Compilation</h3>
+<p>Ghidra doesn't operate on the sinc or slaspec files themselves.
+Instead, they are first compile into a sla file.
+If you look at the x86-64 sla file (located in the previous directory at <code>x86-64.sla</code>), you'll see that it's just an XML file.
+Perusing this file will just reveal at lot of meaningless tags so to guide us, I'll draw our attention to line 11935 (again line numbers may vary depending on version):</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>&lt;subtable_sym name=&quot;instruction&quot; id=&quot;0x0&quot; scope=&quot;0x0&quot; numct=&quot;2660&quot;&gt;
+</span></code></pre>
+<p>This is where the root <code>instruction</code> (sub)table is defined.
+We can see that <code>numct</code>, the number of constructors, is 2660, so there are 2660 different instructions we can disassemble for the architecture.</p>
+<p>Immediately after that line, we see the following element (once again re-formatted):</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>1  &lt;constructor parent=&quot;0x0&quot; first=&quot;1&quot; length=&quot;1&quot; line=&quot;0:1531&quot;&gt;
+</span><span>2     &lt;oper id=&quot;0x660&quot;/&gt;
+</span><span>3     &lt;opprint id=&quot;0&quot;/&gt;
+</span><span>4     &lt;context_op i=&quot;0&quot; shift=&quot;21&quot; mask=&quot;0xe00000&quot; &gt;
+</span><span>5         &lt;intb val=&quot;1&quot;/&gt;
+</span><span>6     &lt;/context_op&gt;
+</span><span>7     &lt;construct_tpl&gt;
+</span><span>8         &lt;null/&gt;
+</span><span>9         &lt;op_tpl code=&quot;BUILD&quot;&gt;
+</span><span>10            &lt;null/&gt;
+</span><span>11            &lt;varnode_tpl&gt;
+</span><span>12                &lt;const_tpl type=&quot;spaceid&quot; name=&quot;const&quot;/&gt;
+</span><span>13                &lt;const_tpl type=&quot;real&quot; val=&quot;0x0&quot;/&gt;
+</span><span>14                &lt;const_tpl type=&quot;real&quot; val=&quot;0x4&quot;/&gt;
+</span><span>15            &lt;/varnode_tpl&gt;
+</span><span>16        &lt;/op_tpl&gt;
+</span><span>17    &lt;/construct_tpl&gt;
+</span><span>18 &lt;/constructor&gt;
+</span></code></pre>
+<p>Looking at the referenced line in <code>ia.sinc</code> (1531), we see the following constructor:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>:^instruction is instrPhase=0 &amp; over=0x2e; instruction [ segover=1; ] {} # CS override
+</span></code></pre>
+<p>We can see that I lied previously and there's an extra, optional section to a constructor, found between the square brackets.
+This is the <code>&lt;actions&gt;</code> section and specifies changes to the disassembly context or constructor-local computations.
+This corresponds to lines 4-6 of the above XML snippet.</p>
+<p>We see the display section (<code>^instruction</code>) on line 3 as an <code>opprint</code> command to print the first operand.
+These operands are specified in a list above the print commands (on line 2).</p>
+<p>Every object (subtable, operand, varnode, etc.) in SLEIGH has an id associated with it.
+In the operand on line 2's case, it's pointing to the object with id 0x660.
+Searching for that id in the sla file shows the following:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>&lt;operand_sym name=&quot;instruction&quot; id=&quot;0x660&quot; scope=&quot;0x129&quot; subsym=&quot;0x0&quot; off=&quot;1&quot; base=&quot;-1&quot; minlen=&quot;0&quot; index=&quot;0&quot;&gt;
+</span><span>    &lt;operand_exp index=&quot;0&quot; table=&quot;0x0&quot; ct=&quot;0x0&quot;/&gt;
+</span><span>&lt;/operand_sym&gt;
+</span></code></pre>
+<p>Which is saying that the operand is referencing 0-th subsymbol, or again the <code>instruction</code> subtable:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>&lt;subtable_sym_head name=&quot;instruction&quot; id=&quot;0x0&quot; scope=&quot;0x0&quot;/&gt;
+</span></code></pre>
+<p>This is because x86 instructions can have a variable number of prefix bytes.</p>
+<p>Also note that we don't care about the <code>operand_exp</code> element inside of the <code>operand_sym</code>. This could be some extra information that comes in handy in some cases but from my experience, there is a lot of redundant or unused information in sla files.</p>
+<p>Going back to the constructor snippet, lines 7-17 define a <code>constructor_tpl</code> (<code>tpl</code> is short for template in SLEIGH parlance).</p>
+<p>This is where the semantic section of the constructor is.</p>
+<p>Even though the semantic section of the constructor in the sinc file is empty, there is a <code>BUILD</code> <code>op_tpl</code> in the semantic section.
+This is because constructor operands each have their own semantic sections which need to be emitted along with the p-code for the current constructor.
+This is done using the <code>BUILD</code> opcode to paste the generate p-code for the specified operand at that location.</p>
+<h3 id="decisions">Decisions</h3>
+<p>There's still a lot I haven't covered, but let's move on for now.
+Astute readers might have noticed that the pattern section is seemingly missing from the constructor previously shown.</p>
+<p>This is because for every subtable, the SLEIGH compiler takes every bit pattern and converts them into a decision tree.
+Each leaf of this tree corresponds to a constructor in the subtable.
+This is presumably done for space efficiency.</p>
+<p>If we search for <code>decision</code> in the sla file, we'll find how the decision tree for the <code>instruction</code> subtable is defined:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>&lt;decision number=&quot;2845&quot; context=&quot;false&quot; start=&quot;0&quot; size=&quot;4&quot;&gt;
+</span><span>    &lt;decision number=&quot;1283&quot; context=&quot;false&quot; start=&quot;4&quot; size=&quot;4&quot;&gt;
+</span><span>        &lt;decision number=&quot;6&quot; context=&quot;true&quot; start=&quot;20&quot; size=&quot;1&quot;&gt;
+</span><span>            &lt;decision number=&quot;3&quot; context=&quot;false&quot; start=&quot;0&quot; size=&quot;0&quot;&gt;
+</span><span>                &lt;pair id=&quot;17&quot;&gt;
+</span><span>                    &lt;context_pat&gt;
+</span><span>                        &lt;pat_block offset=&quot;0&quot; nonzero=&quot;4&quot;&gt;
+</span><span>                          &lt;mask_word mask=&quot;0x8c000001&quot; val=&quot;0x8000000&quot;/&gt;
+</span><span>                        &lt;/pat_block&gt;
+</span><span>                    &lt;/context_pat&gt;
+</span><span>                &lt;/pair&gt;
+</span><span>                &lt;pair id=&quot;70&quot;&gt;
+</span><span>                    &lt;combine_pat&gt;
+</span><span>                        &lt;context_pat&gt;
+</span><span>                            &lt;pat_block offset=&quot;2&quot; nonzero=&quot;3&quot;&gt;
+</span><span>                              &lt;mask_word mask=&quot;0x8008000&quot; val=&quot;0x0&quot;/&gt;
+</span><span>                            &lt;/pat_block&gt;
+</span><span>                        &lt;/context_pat&gt;
+</span><span>                        &lt;instruct_pat&gt;
+</span><span>                            &lt;pat_block offset=&quot;0&quot; nonzero=&quot;2&quot;&gt;
+</span><span>                              &lt;mask_word mask=&quot;0xffc00000&quot; val=&quot;0xc00000&quot;/&gt;
+</span><span>                            &lt;/pat_block&gt;
+</span><span>                        &lt;/instruct_pat&gt;
+</span><span>                    &lt;/combine_pat&gt;
+</span><span>                &lt;/pair&gt;
+</span><span>                ...
+</span></code></pre>
+<p>At each level of the tree, we take <code>size</code> bits at <code>start</code> from either the context or instruction bits
+and use that as an index into the next level.</p>
+<p>At the last level, the rest of the bit pattern is matched using more complex masks.</p>
+<h2 id="resolving">Resolving</h2>
+<p>Now that we now a bit more about the internals of SLEIGH, let's talk about how to implement a SLEIGH interpreter.
+The interpreter will be made in two stages: resolving and building.</p>
+<p>The first step, resolving, is determining which constructor and operands are generated from specific machine code with a specific disassembly context.
+We'll store the result of the resolving in the following enum:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#b48ead;">pub enum </span><span>MatchedSymbol&lt;&#39;a&gt; {
+</span><span>    Constructor(&amp;</span><span style="color:#b48ead;">&#39;a</span><span> Constructor, Vec&lt;MatchedSymbol&lt;</span><span style="color:#b48ead;">&#39;a</span><span>&gt;&gt;),
+</span><span>    Symbol(&amp;</span><span style="color:#b48ead;">&#39;a</span><span> Symbol, </span><span style="color:#b48ead;">usize</span><span>),
+</span><span>    Literal(</span><span style="color:#b48ead;">i64</span><span>, </span><span style="color:#b48ead;">usize</span><span>),
+</span><span>    String(&amp;</span><span style="color:#b48ead;">&#39;a str</span><span>),
+</span><span>}
+</span></code></pre>
+<p>Then we can resolve symbols like:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#b48ead;">fn </span><span style="color:#8fa1b3;">resolve_symbol</span><span>&lt;</span><span style="color:#b48ead;">&#39;a</span><span>, </span><span style="color:#b48ead;">&#39;b</span><span>&gt;(
+</span><span>    </span><span style="color:#bf616a;">data</span><span>: &amp;[</span><span style="color:#b48ead;">u8</span><span>],
+</span><span>    </span><span style="color:#bf616a;">pc</span><span>: </span><span style="color:#b48ead;">u64</span><span>,
+</span><span>    </span><span style="color:#bf616a;">sym</span><span>: &amp;</span><span style="color:#b48ead;">&#39;a</span><span> Symbol,
+</span><span>    </span><span style="color:#bf616a;">ctx</span><span>: &amp;</span><span style="color:#b48ead;">mut </span><span>ResolveContext&lt;</span><span style="color:#b48ead;">&#39;a</span><span>, </span><span style="color:#b48ead;">&#39;b</span><span>&gt;,
+</span><span>) -&gt; Option&lt;(MatchedSymbol&lt;</span><span style="color:#b48ead;">&#39;a</span><span>&gt;, </span><span style="color:#b48ead;">usize</span><span>)&gt; {
+</span><span>    </span><span style="color:#b48ead;">match </span><span>&amp;sym.body {
+</span><span>        SymbolBody::Subtable(table) =&gt; {
+</span><span>            </span><span style="color:#96b5b4;">resolve_constructor</span><span>(data, table, ctx)
+</span><span>            .</span><span style="color:#96b5b4;">map</span><span>(|</span><span style="color:#bf616a;">ct</span><span>| {
+</span><span>                </span><span style="color:#96b5b4;">resolve_operands</span><span>(data, pc, ct, ctx)
+</span><span>                .</span><span style="color:#96b5b4;">map</span><span>(|(</span><span style="color:#bf616a;">operands</span><span>, </span><span style="color:#bf616a;">ops_len</span><span>)| {
+</span><span>                    </span><span style="color:#b48ead;">let</span><span> ct_len = (ct.length * </span><span style="color:#d08770;">8</span><span>) as </span><span style="color:#b48ead;">usize</span><span>;
+</span><span>                    </span><span style="color:#b48ead;">let</span><span> bit_len = ct_len.</span><span style="color:#96b5b4;">max</span><span>(ops_len);
+</span><span>                    </span><span style="color:#b48ead;">let</span><span> matched_sym = MatchedSymbol::Constructor((ct, operands));
+</span><span>                    (matched_sym, bit_len)
+</span><span>                })
+</span><span>            })
+</span><span>            .</span><span style="color:#96b5b4;">flatten</span><span>()
+</span><span>        },
+</span><span>        ...
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>where we pass the instruction symbol to start resolving:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#96b5b4;">resolve_symbol</span><span>(data, pc, &amp;lang.symbols[lang.insn_table_id], ctx);
+</span></code></pre>
+<p>In <code>resolve_constructor</code>, we walk the decision tree to find which the index of the correct constructor:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#b48ead;">fn </span><span style="color:#8fa1b3;">resolve_constructor</span><span>&lt;</span><span style="color:#b48ead;">&#39;a</span><span>, </span><span style="color:#b48ead;">&#39;b</span><span>&gt;(
+</span><span>    </span><span style="color:#bf616a;">words</span><span>: &amp;[</span><span style="color:#b48ead;">u8</span><span>],
+</span><span>    </span><span style="color:#bf616a;">table</span><span>: &amp;</span><span style="color:#b48ead;">&#39;a</span><span> Subtable,
+</span><span>    </span><span style="color:#bf616a;">ctx</span><span>: &amp;ResolveContext&lt;</span><span style="color:#b48ead;">&#39;a</span><span>, </span><span style="color:#b48ead;">&#39;b</span><span>&gt;,
+</span><span>) -&gt; Option&lt;&amp;</span><span style="color:#b48ead;">&#39;a</span><span> Constructor&gt; {
+</span><span>    </span><span style="color:#b48ead;">let mut</span><span> dtree = &amp;table.decision_tree;
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">loop </span><span>{
+</span><span>        </span><span style="color:#b48ead;">match</span><span> dtree {
+</span><span>            DecisionTree::NonLeaf((is_context, start, size, children)) =&gt; {
+</span><span>                </span><span style="color:#b48ead;">if</span><span> children.</span><span style="color:#96b5b4;">len</span><span>() == </span><span style="color:#d08770;">0 </span><span>{
+</span><span>                    </span><span style="color:#b48ead;">return </span><span>None;
+</span><span>                }
+</span><span>
+</span><span>                </span><span style="color:#b48ead;">if </span><span>*size == </span><span style="color:#d08770;">0 </span><span>&amp;&amp; children.</span><span style="color:#96b5b4;">len</span><span>() == </span><span style="color:#d08770;">1 </span><span>{
+</span><span>                    dtree = &amp;children[</span><span style="color:#d08770;">0</span><span>];
+</span><span>                    </span><span style="color:#b48ead;">continue</span><span>;
+</span><span>                }
+</span><span>
+</span><span>                </span><span style="color:#b48ead;">let</span><span> bit_start = </span><span style="color:#d08770;">32 </span><span>- (start + size);
+</span><span>
+</span><span>                </span><span style="color:#b48ead;">let</span><span> idx = </span><span style="color:#b48ead;">if </span><span>!is_context {
+</span><span>                    </span><span style="color:#b48ead;">let</span><span> word = </span><span style="color:#96b5b4;">get_word</span><span>(words, </span><span style="color:#d08770;">0</span><span>, </span><span style="color:#d08770;">4</span><span>) as </span><span style="color:#b48ead;">u32</span><span>;
+</span><span>                    (word &gt;&gt; bit_start) &amp; ((</span><span style="color:#d08770;">1 </span><span>&lt;&lt; size) - </span><span style="color:#d08770;">1</span><span>)
+</span><span>                } </span><span style="color:#b48ead;">else </span><span>{
+</span><span>                    </span><span style="color:#b48ead;">let</span><span> ctx_word = ctx.ctx[(*start as </span><span style="color:#b48ead;">usize</span><span>) / </span><span style="color:#d08770;">32</span><span>];
+</span><span>                    ctx_word.</span><span style="color:#96b5b4;">overflowing_shr</span><span>(bit_start).</span><span style="color:#d08770;">0 </span><span>&amp; ((</span><span style="color:#d08770;">1 </span><span>&lt;&lt; size) - </span><span style="color:#d08770;">1</span><span>)
+</span><span>                } as </span><span style="color:#b48ead;">usize</span><span>;
+</span><span>
+</span><span>                dtree = &amp;children[idx.</span><span style="color:#96b5b4;">min</span><span>(children.</span><span style="color:#96b5b4;">len</span><span>() - </span><span style="color:#d08770;">1</span><span>)];
+</span><span>            }
+</span><span>            DecisionTree::Leaf(pairs) =&gt; {
+</span><span>                </span><span style="color:#b48ead;">for </span><span>(ct_id, pattern) in pairs {
+</span><span>                    </span><span style="color:#b48ead;">let</span><span> ct = &amp;table.constructors[*ct_id as </span><span style="color:#b48ead;">usize</span><span>];
+</span><span>
+</span><span>                    </span><span style="color:#b48ead;">if </span><span style="color:#96b5b4;">match_pattern</span><span>(pattern, &amp;words, ctx) {
+</span><span>                        </span><span style="color:#b48ead;">return </span><span>Some(ct);
+</span><span>                    }
+</span><span>                }
+</span><span>
+</span><span>                </span><span style="color:#b48ead;">return </span><span>None;
+</span><span>            }
+</span><span>        };
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>And we resolve the operands by evaluating each of their expressions, possibly recursively resolving subtables.</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#b48ead;">fn </span><span style="color:#8fa1b3;">resolve_operands</span><span>&lt;</span><span style="color:#b48ead;">&#39;a</span><span>, </span><span style="color:#b48ead;">&#39;b</span><span>&gt;(
+</span><span>    </span><span style="color:#bf616a;">words</span><span>: &amp;[</span><span style="color:#b48ead;">u8</span><span>],
+</span><span>    </span><span style="color:#bf616a;">pc</span><span>: </span><span style="color:#b48ead;">u64</span><span>,
+</span><span>    </span><span style="color:#bf616a;">ct</span><span>: &amp;</span><span style="color:#b48ead;">&#39;a</span><span> Constructor,
+</span><span>    </span><span style="color:#bf616a;">ctx</span><span>: &amp;</span><span style="color:#b48ead;">mut </span><span>ResolveContext&lt;</span><span style="color:#b48ead;">&#39;a</span><span>, </span><span style="color:#b48ead;">&#39;b</span><span>&gt;,
+</span><span>) -&gt; Option&lt;(Vec&lt;MatchedSymbol&lt;</span><span style="color:#b48ead;">&#39;a</span><span>&gt;&gt;, </span><span style="color:#b48ead;">usize</span><span>)&gt; {
+</span><span>    </span><span style="color:#b48ead;">let mut</span><span> matched_ops = vec![];
+</span><span>    </span><span style="color:#b48ead;">let mut</span><span> bit_ends = vec![];
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">for</span><span> op_idx in &amp;ct.operands {
+</span><span>        </span><span style="color:#b48ead;">let</span><span> operand = </span><span style="color:#96b5b4;">get_operand</span><span>(&amp;op_idx, &amp;ctx.lang.symbols);
+</span><span>
+</span><span>        </span><span style="color:#b48ead;">match </span><span>&amp;operand.expr {
+</span><span>            Some(Expr::Field(Field::Token(expr))) =&gt; {...},
+</span><span>            Some(Expr::Field(Field::Context(expr))) =&gt; {...},
+</span><span>            Some(Expr::Unary(_) | Expr::Binary(_)) =&gt; {...},
+</span><span>            Some(Expr::Const(val)) =&gt; {...},
+</span><span>            None =&gt; {
+</span><span>                </span><span style="color:#b48ead;">let</span><span> op_sym = &amp;ctx.lang.symbols[&amp;operand.subsym];
+</span><span>
+</span><span>                </span><span style="color:#b48ead;">let</span><span> base = </span><span style="color:#b48ead;">if</span><span> operand.base &lt; </span><span style="color:#d08770;">0 </span><span>{
+</span><span>                    operand.off as </span><span style="color:#b48ead;">usize
+</span><span>                } </span><span style="color:#b48ead;">else </span><span>{
+</span><span>                    bit_ends[operand.base as </span><span style="color:#b48ead;">usize</span><span>] / </span><span style="color:#d08770;">8
+</span><span>                };
+</span><span>
+</span><span>                </span><span style="color:#65737e;">// Before recursively resolving a symbol, we first need to modify the context.
+</span><span>                </span><span style="color:#b48ead;">for</span><span> op in &amp;ct.context_ops {
+</span><span>                    </span><span style="color:#b48ead;">let</span><span> existing = ctx.ctx[op.i as </span><span style="color:#b48ead;">usize</span><span>];
+</span><span>                    </span><span style="color:#b48ead;">let</span><span> mask = op.mask;
+</span><span>
+</span><span>                    </span><span style="color:#b48ead;">let </span><span>(val, _, _) = </span><span style="color:#96b5b4;">evaluate_expr</span><span>(&amp;op.expr, &amp;ctx.ctx, &amp;matched_ops, &amp;ctx.reg_space);
+</span><span>                    </span><span style="color:#b48ead;">let</span><span> v = (val as </span><span style="color:#b48ead;">u32</span><span>) &lt;&lt; op.shift;
+</span><span>                    ctx.ctx[op.i as </span><span style="color:#b48ead;">usize</span><span>] = (existing &amp; !mask) | (v &amp; mask);
+</span><span>                }
+</span><span>
+</span><span>                </span><span style="color:#b48ead;">match </span><span style="color:#96b5b4;">resolve_symbol</span><span>(&amp;words[base..], pc + base as </span><span style="color:#b48ead;">u64</span><span>, op_sym, ctx) {
+</span><span>                    Some((matched_sym, sub_bit_end)) =&gt; {
+</span><span>                        </span><span style="color:#b48ead;">let</span><span> op_bit_end = (base * </span><span style="color:#d08770;">8</span><span>) as </span><span style="color:#b48ead;">usize </span><span>+ sub_bit_end;
+</span><span>                        matched_ops.</span><span style="color:#96b5b4;">push</span><span>(matched_sym);
+</span><span>                        bit_ends.</span><span style="color:#96b5b4;">push</span><span>(op_bit_end);
+</span><span>                    },
+</span><span>                    None =&gt; {
+</span><span>                        </span><span style="color:#b48ead;">return </span><span>None;
+</span><span>                    },
+</span><span>                };
+</span><span>            },
+</span><span>        }
+</span><span>    }
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">let</span><span> bit_len = bit_ends.</span><span style="color:#96b5b4;">into_iter</span><span>().</span><span style="color:#96b5b4;">max</span><span>().</span><span style="color:#96b5b4;">unwrap_or</span><span>(</span><span style="color:#d08770;">0</span><span>);
+</span><span>    Some((matched_ops, bit_len))
+</span><span>}
+</span></code></pre>
+<p>Obviously I've left a lot of code out but this should give you the gist.
+To see all of the gory detail, check <a href="https://github.com/SamL98/rust-sleigh/blob/master/src/symbol_resolver.rs">this</a> out.</p>
+<p>If we now pass the byte 0x55 through the resolver, we get the following matched symbol with the same matched constructors as ghidra:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>instruction (line 3380)
+</span><span>  Rmr64 (line 604)
+</span><span>    RBP
+</span></code></pre>
+<p>And if we look at a more complicated instruction, like <code>[f3, 0f, 11, 87, 68, 81, 20, 00]</code>,
+we see that it disassembles to instruction <code>MOVSS dword ptr [RDI + 0x208168], XMM0</code> and has the following parse tree:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>instruction (line 1540)
+</span><span>  instruction (line 5915)
+</span><span>    m32 (line 805)
+</span><span>      Mem (line 790)
+</span><span>        segWide (line 759)
+</span><span>        addr64 (line 738)
+</span><span>          Rmr64 (line 604)
+</span><span>            RDI
+</span><span>          simm32_64 (line 659)
+</span><span>            0x208168:4
+</span><span>    XmmReg (line 614)
+</span><span>      XMM0
+</span></code></pre>
+<h2 id="building">Building</h2>
+<p>Now that we can generate the parse tree for a sequence of bytes, we need to generate the p-code for the matched constructor.</p>
+<p>Going back to the <code>PUSH RBP</code> instruction, let's again print out the parse tree but this time also printing out the constructor templates:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>instruction (line 3380)
+</span><span>    BUILD(const:0:4)
+</span><span>    unique:ef80:8 = COPY(Handle#0)
+</span><span>    register:20:8 = INT_SUB(register:20:8, const:8:8)
+</span><span>    STORE(const:ram:8, register:20:8, unique:ef80:8)
+</span><span>
+</span><span>  Rmr64 (line 604)
+</span><span>      *[Handle#0:Handle#0](0:Handle#0:0)
+</span><span>
+</span><span>    RBP
+</span></code></pre>
+<p>Much of the first template should look reasonable, i.e. the <code>COPY</code>, <code>INT_SUB</code>, and <code>STORE</code> operations.
+These are what we would expect the <code>PUSH</code> instruction to be doing.</p>
+<p>Things get a little confusing when we look at the operand of the <code>COPY</code> operation, <code>Handle#0</code>.</p>
+<p>See, remember that each constructor can export a value.
+In fact, here's the <code>Rmr64</code> constructor on line 604 again:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>Rmr64: r64 is rexBprefix=0 &amp; r64 {
+</span><span>    export r64;
+</span><span>}
+</span></code></pre>
+<p>So when we're referencing <code>Handle#0</code>, we're referencing the value exported by the 0-th operand.</p>
+<p>This is <code>*[Handle#0:Handle#0](0:Handle#0:0)</code> which corresponds to the <code>export r64</code> statement.</p>
+<p>I'm going to try to explain what this means but I did a good bit of guesswork when implement this part and I know my understanding isn't 100% correct.
+Hopefully I'll go back soon and actually re-read the relevant ghidra code to figure out what's going on but for now, I'm just going to do my best.
+That being said, this part of the interpreter seems to work so that's something.</p>
+<p>Anyways, exported handles can be &quot;dynamic&quot;.
+You can think of this as basically meaning that the handle is a pointer.
+Whenever this dynamic handle is read or written to, we're actually going to read or write to the pointed to memory.</p>
+<p>To make this more concrete, let's look at the parse tree with the constructor templates for the more complicated <code>MOVSS</code> instruction:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>instruction (line 1540)
+</span><span>    BUILD(const:0:4)
+</span><span>
+</span><span>  instruction (line 5915)
+</span><span>      BUILD(const:1:4)
+</span><span>      BUILD(const:0:4)
+</span><span>      Handle#0 = COPY(Handle#1:Handle#1:4)
+</span><span>
+</span><span>    m32 (line 805)
+</span><span>        *[ram:4](Handle#0)
+</span><span>        BUILD(const:0:4)
+</span><span>
+</span><span>      Mem (line 790)
+</span><span>          *[Handle#1:Handle#1](0:Handle#1:0)
+</span><span>          BUILD(const:1:4)
+</span><span>          BUILD(const:0:4)
+</span><span>
+</span><span>        segWide (line 759)
+</span><span>            *[const:8](0:0:0)
+</span><span>
+</span><span>        addr64 (line 738)
+</span><span>            *[unique:Handle#0](0:3200:0)
+</span><span>            BUILD(const:1:4)
+</span><span>            BUILD(const:0:4)
+</span><span>            unique:3200:Handle#0 = INT_ADD(Handle#0, Handle#1)
+</span><span>
+</span><span>          Rmr64 (line 604)
+</span><span>              *[Handle#0:Handle#0](0:Handle#0:0)
+</span><span>
+</span><span>            RDI
+</span><span>
+</span><span>          simm32_64 (line 659)
+</span><span>              *[const:8](Handle#0:Handle#0:0)
+</span><span>
+</span><span>            208168:4
+</span><span>
+</span><span>    XmmReg (line 614)
+</span><span>        *[Handle#0:Handle#0](0:Handle#0:0)
+</span><span>
+</span><span>      XMM0
+</span></code></pre>
+<p>We can see that aside from the <code>BUILD</code> ops, the main instruction (on line 5915) only has a <code>COPY</code> op even though clearly the instruction <code>MOVSS dword ptr [RDI + 0x208168], XMM0</code> writes to memory.
+Looking at the sinc file, we see this confirmed:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>:MOVSS m32, XmmReg is vexMode=0 &amp; $(PRE_F3) &amp; byte=0x0F; byte=0x11; m32 &amp; XmmReg ... {
+</span><span>    m32 = XmmReg[0,32];
+</span><span>}
+</span></code></pre>
+<p>However, if we look at the <code>m32</code> matched constructor on line 805, we see that the exported handle has the <code>ram</code> address space -- <code>*[ram:4](Handle#0)</code>.</p>
+<p>Again looking at line 805 in the sinc file confirms this:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>m32: &quot;dword ptr&quot; Mem is Mem {
+</span><span>    export *:4 Mem;
+</span><span>}
+</span></code></pre>
+<p>Going back to the <code>PUSH RBP</code> example and <code>*[Handle#0:Handle#0](0:Handle#0:0)</code>, it seems to me that this format where the pointer and offset are taken from the handle while the address space and size are zero is a special case meaning that just the regular varnode is exported.
+This also seems to be the case with the matched <code>Mem</code> constructor on line 790.
+This is one of those cases where I don't think the SLEIGH compiler authors intended for this to be hardcoded as a special case but it turns out to be true in the way that they generated the sla file.</p>
+<p>Anyways, the birds-eye-view of the building process will be to recursively build all of the operands (in order to obtain the exported handles and emitted p-code), then build the final p-code by pasting the operand p-code from the <code>BUILD</code> directives while substituting any handle variables with the handles that we just built.</p>
+<p>In code, this looks roughly like:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#b48ead;">fn </span><span style="color:#8fa1b3;">build_sym</span><span>&lt;</span><span style="color:#b48ead;">&#39;a</span><span>&gt;(
+</span><span>    </span><span style="color:#bf616a;">matched_sym</span><span>: &amp;</span><span style="color:#b48ead;">&#39;a</span><span> MatchedSymbol,
+</span><span>    </span><span style="color:#bf616a;">ctx</span><span>: &amp;BuildContext,
+</span><span>) -&gt; (Vec&lt;PcodeOp&gt;, Option&lt;PcodeObject&gt;) {
+</span><span>    </span><span style="color:#b48ead;">let mut</span><span> op_pcode = vec![];
+</span><span>    </span><span style="color:#b48ead;">let mut</span><span> op_handles = vec![];
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">let mut</span><span> pcode = vec![];
+</span><span>    </span><span style="color:#b48ead;">let mut</span><span> handle = None;
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">match</span><span> matched_sym {
+</span><span>        MatchedSymbol::Symbol(sym, _) =&gt; {...},       </span><span style="color:#65737e;">// Set handle to varnode symbol,
+</span><span>        MatchedSymbol::Literal((val, size)) =&gt; {...}, </span><span style="color:#65737e;">// Set handle to const varnode.
+</span><span>        MatchedSymbol::Constructor((ct, operands)) =&gt; {
+</span><span>            </span><span style="color:#65737e;">// First build the operands.
+</span><span>            </span><span style="color:#b48ead;">for</span><span> op in operands {
+</span><span>                </span><span style="color:#b48ead;">let </span><span>(</span><span style="color:#b48ead;">mut</span><span> op_ops, op_hnd) = </span><span style="color:#96b5b4;">build_sym</span><span>(op, ctx);
+</span><span>                op_handles.</span><span style="color:#96b5b4;">push</span><span>(op_hnd.</span><span style="color:#96b5b4;">unwrap_or</span><span>(PcodeObject::Dummy));
+</span><span>                op_pcode.</span><span style="color:#96b5b4;">push</span><span>(op_ops);
+</span><span>            }
+</span><span>
+</span><span>            </span><span style="color:#b48ead;">let</span><span> template = ct.template.</span><span style="color:#96b5b4;">as_ref</span><span>().</span><span style="color:#96b5b4;">unwrap</span><span>();
+</span><span>
+</span><span>            </span><span style="color:#65737e;">// Then build the p-code.
+</span><span>            </span><span style="color:#b48ead;">for</span><span> stmt in &amp;template.statements {
+</span><span>                </span><span style="color:#b48ead;">if let </span><span>ConsTemplate::Op(op_template) = stmt {
+</span><span>                    </span><span style="color:#b48ead;">if</span><span> op_template.code == &quot;</span><span style="color:#a3be8c;">BUILD</span><span>&quot; {
+</span><span>                        </span><span style="color:#b48ead;">if let </span><span>ConstTemplate::Val(op_idx) = op_template.inputs[</span><span style="color:#d08770;">0</span><span>].offset_template {
+</span><span>                            </span><span style="color:#b48ead;">let mut</span><span> op_ops = op_pcode[op_idx as </span><span style="color:#b48ead;">usize</span><span>].</span><span style="color:#96b5b4;">clone</span><span>();
+</span><span>                            pcode.</span><span style="color:#96b5b4;">append</span><span>(&amp;</span><span style="color:#b48ead;">mut</span><span> op_ops);
+</span><span>                        }
+</span><span>                    }
+</span><span>                    </span><span style="color:#b48ead;">else </span><span>{
+</span><span>                        </span><span style="color:#b48ead;">let</span><span> uniq = (start_op_idx + num_ops) as </span><span style="color:#b48ead;">i32</span><span>;
+</span><span>                        </span><span style="color:#b48ead;">let mut</span><span> built_ops = </span><span style="color:#96b5b4;">build_pcodeop</span><span>(
+</span><span>                            SeqNum::from(ctx.pc, uniq),
+</span><span>                            &amp;op_template,
+</span><span>                            ctx,
+</span><span>                        );
+</span><span>                        pcode.</span><span style="color:#96b5b4;">append</span><span>(&amp;</span><span style="color:#b48ead;">mut</span><span> built_ops);
+</span><span>                    } 
+</span><span>                }
+</span><span>            }
+</span><span>
+</span><span>            </span><span style="color:#65737e;">// Build the exported handle if there is one.
+</span><span>            </span><span style="color:#b48ead;">for</span><span> stmt in &amp;template.statements {
+</span><span>                </span><span style="color:#b48ead;">if let </span><span>ConsTemplate::Handle(handle_template) = stmt {
+</span><span>                    </span><span style="color:#b48ead;">let</span><span> my_handle = </span><span style="color:#96b5b4;">build_handle</span><span>(&amp;handle_template, op_handles, ctx);
+</span><span>                    handle = Some(my_handle);
+</span><span>                    </span><span style="color:#b48ead;">break</span><span>;
+</span><span>                }
+</span><span>            }
+</span><span>        },
+</span><span>    }
+</span><span>
+</span><span>    (pcode, handle)
+</span><span>}
+</span></code></pre>
+<p>Where in <code>build_pcodeop</code>, we have to handle the dynamic handles and therefore can produce multiple ops:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#b48ead;">fn </span><span style="color:#8fa1b3;">build_pcodeop</span><span>&lt;</span><span style="color:#b48ead;">&#39;a</span><span>&gt;(
+</span><span>    </span><span style="color:#b48ead;">mut </span><span style="color:#bf616a;">seq</span><span>: SeqNum,
+</span><span>    </span><span style="color:#bf616a;">op_tpl</span><span>: &amp;</span><span style="color:#b48ead;">&#39;a</span><span> OpTemplate,
+</span><span>    </span><span style="color:#bf616a;">objs</span><span>: &amp;</span><span style="color:#b48ead;">&#39;a</span><span> [PcodeObject],
+</span><span>    </span><span style="color:#bf616a;">ctx</span><span>: &amp;BuildContext,
+</span><span>) -&gt; Vec&lt;PcodeOp&gt; {
+</span><span>    </span><span style="color:#b48ead;">let mut</span><span> opcode = op_tpl.code.</span><span style="color:#96b5b4;">as_str</span><span>();
+</span><span>    </span><span style="color:#b48ead;">let mut</span><span> inputs = vec![];
+</span><span>    </span><span style="color:#b48ead;">let mut</span><span> output = None;
+</span><span>    </span><span style="color:#b48ead;">let mut</span><span> ops = vec![];
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">for</span><span> tpl in op_tpl.inputs {
+</span><span>        </span><span style="color:#b48ead;">if let </span><span>Some(idx) = tpl.</span><span style="color:#96b5b4;">handle_index</span><span>() {
+</span><span>            </span><span style="color:#b48ead;">match </span><span>&amp;objs[idx] {
+</span><span>                PcodeObject::Varnode(vn) =&gt; inputs.</span><span style="color:#96b5b4;">push</span><span>(vn.</span><span style="color:#96b5b4;">clone</span><span>()),
+</span><span>                PcodeObject::Handle(h) =&gt; {
+</span><span>                    </span><span style="color:#b48ead;">if </span><span>!h.temp.space.</span><span style="color:#96b5b4;">is_dummy</span><span>() {
+</span><span>                        ops.</span><span style="color:#96b5b4;">push</span><span>(PcodeOp::new(
+</span><span>                            seq,
+</span><span>                            &quot;</span><span style="color:#a3be8c;">LOAD</span><span>&quot;,
+</span><span>                            vec![Varnode::dummy(), h.pointer.</span><span style="color:#96b5b4;">clone</span><span>()],
+</span><span>                            Some(h.temp.</span><span style="color:#96b5b4;">clone</span><span>()),
+</span><span>                        ));
+</span><span>
+</span><span>                        inputs.</span><span style="color:#96b5b4;">push</span><span>(h.temp.</span><span style="color:#96b5b4;">clone</span><span>());
+</span><span>                        seq = seq.</span><span style="color:#96b5b4;">next</span><span>();
+</span><span>                    } </span><span style="color:#b48ead;">else </span><span>{
+</span><span>                        inputs.</span><span style="color:#96b5b4;">push</span><span>(h.pointer.</span><span style="color:#96b5b4;">clone</span><span>());
+</span><span>                    }
+</span><span>                },
+</span><span>                _ =&gt; panic!(),
+</span><span>            };
+</span><span>        } </span><span style="color:#b48ead;">else </span><span>{
+</span><span>            </span><span style="color:#b48ead;">let</span><span> vn = </span><span style="color:#96b5b4;">build_varnode</span><span>(tpl, objs, ctx);
+</span><span>            inputs.</span><span style="color:#96b5b4;">push</span><span>(vn);
+</span><span>        }
+</span><span>    }
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">if let </span><span>Some(tpl) = &amp;op_tpl.output {
+</span><span>        </span><span style="color:#b48ead;">if let </span><span>Some(idx) = tpl.</span><span style="color:#96b5b4;">handle_index</span><span>() {
+</span><span>            </span><span style="color:#b48ead;">match </span><span>&amp;objs[idx] {
+</span><span>                PcodeObject::Varnode(vn) =&gt; output = Some(vn.</span><span style="color:#96b5b4;">clone</span><span>()),
+</span><span>                PcodeObject::Handle(h) =&gt; {
+</span><span>                    </span><span style="color:#b48ead;">if </span><span>!h.temp.space.</span><span style="color:#96b5b4;">is_dummy</span><span>() {
+</span><span>                        </span><span style="color:#b48ead;">let mut</span><span> output = Some(h.temp.</span><span style="color:#96b5b4;">clone</span><span>());
+</span><span>                        ops.</span><span style="color:#96b5b4;">push</span><span>(PcodeOp::new(
+</span><span>                            seq,
+</span><span>                            opcode,
+</span><span>                            inputs.</span><span style="color:#96b5b4;">clone</span><span>(),
+</span><span>                            output,
+</span><span>                        ));
+</span><span>
+</span><span>                        opcode = &quot;</span><span style="color:#a3be8c;">STORE</span><span>&quot;;
+</span><span>                        inputs = vec![Varnode::dummy(), h.pointer.</span><span style="color:#96b5b4;">clone</span><span>(), h.temp.</span><span style="color:#96b5b4;">clone</span><span>()];
+</span><span>                        seq = seq.</span><span style="color:#96b5b4;">next</span><span>();
+</span><span>                    } </span><span style="color:#b48ead;">else </span><span>{
+</span><span>                        output = Some(h.pointer.</span><span style="color:#96b5b4;">clone</span><span>());
+</span><span>                    }
+</span><span>                },
+</span><span>                _ =&gt; panic!(),
+</span><span>            };
+</span><span>        } </span><span style="color:#b48ead;">else </span><span>{
+</span><span>            </span><span style="color:#b48ead;">let</span><span> vn = </span><span style="color:#96b5b4;">build_varnode</span><span>(tpl, objs, ctx);
+</span><span>            output = Some(vn);
+</span><span>        }
+</span><span>    }
+</span><span>
+</span><span>    ops.</span><span style="color:#96b5b4;">push</span><span>(PcodeOp::new(seq, opcode, inputs, output));
+</span><span>    op
+</span><span>}
+</span></code></pre>
+<p>Now our instructions should have the correct p-code:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>[55]
+</span><span>0x100005bb0:0: Uef80:8 = RBP
+</span><span>0x100005bb0:1: RSP = RSP - 0x8:8
+</span><span>0x100005bb0:2: *RSP = Uef80:8
+</span><span>
+</span><span>[f3, 0f, 11, 87, 68, 81, 20, 00]
+</span><span>0x100005beb:0: U3200:8 = RDI + 0x208168:8
+</span><span>0x100005beb:1: U5480:4 = XMM0_Da
+</span><span>0x100005beb:2: *U3200:8 = U5480:4
+</span></code></pre>
+<h3 id="building-text">Building Text</h3>
+<p>The only thing we now have to do is use the constructor's display section to generate the instruction's assembly.</p>
+<p>We can do this fairly trivially by iterating over the constructor's print commands and printing either the string literal piece or recursively generating the text for the operand:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#b48ead;">fn </span><span style="color:#8fa1b3;">build_cmd_text</span><span>(</span><span style="color:#bf616a;">cmd</span><span>: &amp;PrintCommand, </span><span style="color:#bf616a;">operands</span><span>: &amp;Vec&lt;MatchedSymbol&gt;) -&gt; String {
+</span><span>    </span><span style="color:#b48ead;">match</span><span> cmd {
+</span><span>        PrintCommand::Op(op_idx) =&gt; </span><span style="color:#96b5b4;">build_text</span><span>(&amp;operands[*op_idx as </span><span style="color:#b48ead;">usize</span><span>]),
+</span><span>        PrintCommand::Piece(piece) =&gt; piece.</span><span style="color:#96b5b4;">clone</span><span>(),
+</span><span>    }
+</span><span>}
+</span><span>
+</span><span style="color:#b48ead;">pub fn </span><span style="color:#8fa1b3;">build_text</span><span>(</span><span style="color:#bf616a;">matched_sym</span><span>: &amp;MatchedSymbol) -&gt; String {
+</span><span>    </span><span style="color:#b48ead;">let mut</span><span> text = String::new();
+</span><span>
+</span><span>    </span><span style="color:#b48ead;">match </span><span>&amp;matched_sym {
+</span><span>        MatchedSymbol::Constructor((ct, operands)) =&gt; {
+</span><span>            </span><span style="color:#b48ead;">if let </span><span>Some(cmds) = &amp;ct.print_commands {
+</span><span>                </span><span style="color:#b48ead;">for</span><span> cmd in cmds {
+</span><span>                    text.</span><span style="color:#96b5b4;">push_str</span><span>(&amp;</span><span style="color:#96b5b4;">build_cmd_text</span><span>(cmd, &amp;operands));
+</span><span>                }
+</span><span>            }
+</span><span>        },
+</span><span>        MatchedSymbol::Symbol(sym, _) =&gt; {
+</span><span>            </span><span style="color:#b48ead;">if let </span><span>SymbolBody::Varnode(vnode) = &amp;sym.body {
+</span><span>                text.</span><span style="color:#96b5b4;">push_str</span><span>(&amp;vnode.name);
+</span><span>            }
+</span><span>        },
+</span><span>        MatchedSymbol::Literal((val, sz)) =&gt; {
+</span><span>            </span><span style="color:#b48ead;">let mut</span><span> v = *val as </span><span style="color:#b48ead;">u64</span><span>;
+</span><span>            </span><span style="color:#b48ead;">let mut</span><span> sign_str = &quot;&quot;;
+</span><span>
+</span><span>            </span><span style="color:#65737e;">// ... fixups for negative numbers ...
+</span><span>            text.</span><span style="color:#96b5b4;">push_str</span><span>(format!(&quot;</span><span style="color:#d08770;">{}</span><span style="color:#a3be8c;">0x</span><span style="color:#d08770;">{:x}</span><span>&quot;, sign_str, v).</span><span style="color:#96b5b4;">as_str</span><span>());
+</span><span>        },
+</span><span>        MatchedSymbol::String(s) =&gt; {
+</span><span>            text.</span><span style="color:#96b5b4;">push_str</span><span>(&amp;s);
+</span><span>        }
+</span><span>    }
+</span><span>
+</span><span>    text
+</span><span>}
+</span></code></pre>
+<p>And now we should get the p-code along with the assembly for our lifted instructions:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>[55]
+</span><span>0x100005bb0: PUSH RBP
+</span><span>    0x100005bb0:0: Uef80:8 = RBP
+</span><span>    0x100005bb0:1: RSP = RSP - 0x8:8
+</span><span>    0x100005bb0:2: *RSP = Uef80:8
+</span><span>
+</span><span>[f3, 0f, 11, 87, 68, 81, 20, 00]
+</span><span>0x100005beb: MOVSS dword ptr [RDI + 0x208168], XMM0
+</span><span>    0x100005beb:0: U3200:8 = RDI + 0x208168:8
+</span><span>    0x100005beb:1: U5480:4 = XMM0_Da
+</span><span>    0x100005beb:2: *U3200:8 = U5480:4
+</span></code></pre>
+<h2 id="conclusion">Conclusion</h2>
+<p>This has been for me, and I can only imagine for the reader too, a long, arduous, and confusing journey through subtables, constructors, operands, handles, and more.</p>
+<p>I hope you've come away knowing a little more about SLEIGH or at least appreciating a bit its weirdness and occasional elegance.</p>
+<p><a href="https://github.com/SamL98/rust-sleigh">Here</a>'s another link to the full code in case you don't want to scroll back up and if you have any questions, don't hesitate to email me.</p>
+
+        </section>
+
+        
+
+    </article>
+</main>
+
+
+    </div>
+</body>
+
+</html>

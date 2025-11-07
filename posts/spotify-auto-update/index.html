@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    
+
+    
+    
+    
+    <title>
+         Persistent Binary Patches
+        
+    </title>
+
+        
+            <meta property="og:title" content="Persistent Binary Patches" />
+        
+     
+
+     
+         
+     
+
+     
+         
+    
+
+    
+    
+
+    
+    
+        <link href=https://saml98.github.io/fonts.css rel="stylesheet" />
+    
+
+    
+    
+
+
+    
+
+    
+    <link rel="alternate" type="application/atom+xml" title="Sam&#x27;s Internet Home" href="https://saml98.github.io/atom.xml">
+
+    
+    
+    
+        <link rel="stylesheet" type="text/css" href="https://saml98.github.io/theme/light.css"/>
+        <link rel="stylesheet" type="text/css" href="https://saml98.github.io/theme/dark.css" media="(prefers-color-scheme: dark)"/>
+    
+
+    
+        <script src=https://saml98.github.io/js/themetoggle.js></script>
+
+        
+            <script>
+                if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                    setTheme("dark");
+                } else {
+                    setTheme("light");
+                }
+            </script>
+        
+    
+
+    <link rel="stylesheet" type="text/css" media="screen" href=https://saml98.github.io/main.css />
+
+
+    
+</head>
+
+
+<script data-goatcounter="https://saml98.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
+
+<body>
+    <div class="content">
+        <header>
+    <div class="main">
+        <a href=https:&#x2F;&#x2F;saml98.github.io>Sam&#x27;s Internet Home</a>
+    </div>
+
+    <nav>
+        
+            <a href=&#x2F;posts style="margin-left: 0.7em">&#x2F;posts</a>
+        
+            <a href=&#x2F;projects style="margin-left: 0.7em">&#x2F;projects</a>
+        
+            <a href=&#x2F;about style="margin-left: 0.7em">&#x2F;about</a>
+        
+
+        
+    </nav>
+</header>
+
+
+        
+        
+    
+<main>
+    <article>
+        <div class="title">
+            
+            
+    <div class="page-header">
+        Persistent Binary Patches<span class="primary-color" style="font-size: 1.6em">.</span>
+    </div>
+
+
+                <div class="meta">
+                    
+                        Posted on <time>2021-01-24</time>
+                    
+
+                    
+                </div>
+        </div>
+
+        
+
+        
+        
+
+        <section class="body">
+            <p>As I'm sure you're following this and my <a href="https://lerner98.medium.com">other blog</a> closely, you'll recall that I have been tracking the songs I skip in Spotify in order to eventually build a model for &quot;flow-state&quot; listening. In order to track my skips, I inject a library into the Spotify binary that hooks the appropriate functions and logs calls to them.</p>
+<p>As I'm sure you'll also remember, in <a href="https://saml98.github.io/jekyll/update/2020/05/03/ghidra-stack-strings.html">this post</a> I encountered a situation where Spotify was auto-updating itself. Hence, a new, unblemished binary would be downloaded and replace the old, infected version. In this post, I'll describe what I've learned about the auto-update process (which isn't much) and how to modify our library to reinject itself into the update binary.</p>
+<h2 id="searching-for-the-update">Searching for the Update</h2>
+<p>Let's think about some possible ways an app could implement an auto-update feature.</p>
+<p>One way could be to:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>1. Download the update (either to a tmp file or to the same path as the currently executing binary).
+</span><span>2. Move the update file to overwrite the existing file (if not overwritten on download).
+</span><span>3. Wait until the application is exited/relaunched to run the updated version.
+</span></code></pre>
+<p>or</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>1. Download the update.
+</span><span>2. Replace the existing version.
+</span><span>3. Run `exec` to run the upgrade immediately.
+</span></code></pre>
+<p>In both scenarios, steps (1) and (2) are the same, but in scenario 2, we have to infect the update before step (3). This is because, if we wait for the current process memory to be replaced with the update's, our injection code will be overwritten as well. In scenario 1, we don't have this constraint; all we need to do is infect the update sometime before the current application exits.</p>
+<p>To insure ourselves againt both scenarios, we'll reinfect the update before step (3) and preferably before step (2) (you'll see why later).</p>
+<h3 id="finding-the-function">Finding the Function</h3>
+<p>We know that to perform step (2), we'll most likely need to overwrite <code>/Applications/Spotify.app/Contents</code> since that's where the current binary lives. Searching for that string and variants, we come across the following code (note all code snippets are cleaned-up Ghidra output):</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>void FUN_1008c8a30(void * param_1, void * param_2, long param_3, long param_4)
+</span><span>{
+</span><span>    ...
+</span><span>    char * c_str = param_2 + 1;
+</span><span>
+</span><span>    if ((*param_2 &amp; 1) != 0)
+</span><span>        c_str = *(param_2 + 0x10);
+</span><span>
+</span><span>    NSString * str1 = [NSString stringWithUTF8String:c_str];
+</span><span>    NSString * str2 = [str1 stringByAppendingFormat:&quot;/%s.app&quot;, &quot;Spotify&quot;];
+</span><span>    ...
+</span><span>}
+</span></code></pre>
+<p>My guess is that <code>param_2</code> is a C++ string with a structure similar to:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>struct str_ptr {
+</span><span>    ... 15 unknown bytes ...
+</span><span>    char * ptr;
+</span><span>}
+</span><span>
+</span><span>struct str {
+</span><span>    // 0 - The string is small and therefore stored in `data.s`.
+</span><span>    // 1 - The string is large and therefore pointed to by `data.sp.ptr`.
+</span><span>    byte flags;
+</span><span>
+</span><span>    union {
+</span><span>        char s[sizeof(struct str_ptr)];
+</span><span>        struct str_ptr sp;
+</span><span>    } data;
+</span><span>}
+</span></code></pre>
+<p>Regardless, this function looks like it a promising place to start looking.</p>
+<p>Looking at some more log messages in the function, we see that this function originated from a file called <code>background_update_extractor.mm</code>:</p>
+<p><img src="/update_log.png" alt="log" /></p>
+<p>Very promising indeed.</p>
+<p>Let's look at more of the function's code to see what it does:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>{
+</span><span>    ...
+</span><span>    NSTask * task = [[NSTask alloc] init];
+</span><span>    task.launchPath = @&quot;/usr/bin/tar&quot;;
+</span><span>
+</span><span>    c_str = param_1-&gt;data.s1;
+</span><span>
+</span><span>    if ((param_1-&gt;flags &amp; 1) != 0)
+</span><span>        c_str = *(param_1-&gt;data.sp.ptr);
+</span><span>
+</span><span>    NSString * str3 = [NSString stringWithUTF8String:c_str];
+</span><span>    task.arguments = @[@&quot;xf&quot;, str3];
+</span><span>
+</span><span>    task.currentDirectoryPath = str2;
+</span><span>
+</span><span>    [task launch];
+</span><span>    [task waitUntilExit];
+</span><span>    ...
+</span><span>}
+</span></code></pre>
+<p>Things should hopefully be starting to come together.</p>
+<p>It appears that the update is downloaded as a tarball to <code>param_1</code> and is unpacked to <code>&lt;param_2&gt;/Spotify.app</code>. To confirm this, we can set a breakpoint at this function and print the two parameters (note that we have to wait for an auto-update to be available for this function to be called so patience is recommended for this step!):</p>
+<p><img src="/log_params.png" alt="params" /></p>
+<p>We can confirm that the &quot;.tbz&quot; file is a compressed (bzip2) tarball and once the <code>NSTask</code> completes, the &quot;sp_update&quot; tmp folder will have a fresh copy of &quot;Spotify.app&quot; in it.</p>
+<p>All we need to do now if find an appropriate method to hook (after the call to <code>[task launch]</code>.</p>
+<h3 id="finding-method-calls">Finding Method Calls</h3>
+<p>We want our hooked method to satisfy a few conditions:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>1. It&#39;s only called after `[task launch]`.
+</span><span>2. It&#39;s called 100% of the time.
+</span><span>3. It&#39;s called as close to `[task launch]` as possible but not before.
+</span></code></pre>
+<p>Looking at calls that are executed directly after <code>[task launch]</code>, the most obvious choice is the call to <code>[task waitUntilExit]</code> directly after it. All we have to do now is confirm that it's only called at the right time. We want this condition so that our hook doesn't get triggered randomly and we try to infect a non-existing update.</p>
+<p>One thing we can do scour the binary and check that <code>[task waitUntilExit]</code> is only called once. However, a simpler thing we can do is to check that <code>NSTask * self</code> has the arguments we expect in our hook.</p>
+<p>Therefore, the beginning of our hook will look like this:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>void my_waitUntilExit(NSTask * self, SEL cmd)
+</span><span>{
+</span><span>    // Call the original method.
+</span><span>    ((proto_waitUntilExit *)orig_waitUntilExit)(self, cmd);
+</span><span>
+</span><span>    NSString * exec = self.launchPath,
+</span><span>             * cwd = self.currentDirectoryPath;
+</span><span>    NSArray * args = self.arguments;
+</span><span>
+</span><span>    if ((exec &amp;&amp; cwd &amp;&amp; args &amp;&amp; \
+</span><span>         [exec isEqualTo:@&quot;/usr/bin/tar&quot;] &amp;&amp; \
+</span><span>         [cwd hasSuffix:@&quot;Spotify.app&quot;] &amp;&amp; \
+</span><span>         args.count &gt; 0 &amp;&amp; \
+</span><span>         [args[0] isEqualTo:@&quot;xf&quot;]))
+</span><span>    {
+</span><span>        ...
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>So we check that if we were running our command in a shell, it would look like this:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>Spotify.app&gt; /usr/bin/tar xf &lt;BZIP PATH&gt;
+</span></code></pre>
+<h3 id="the-rest-of-the-hook">The Rest of the Hook</h3>
+<p>Then in the if statement, we need to</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>1. Parse the dylibs current loaded from /Applications/Spotify.app/Contents/MacOS/Spotify
+</span><span>2. Reinject any dylibs prefixed with &quot;spskip&quot; into &lt;UPDATE PATH&gt;/Spotify.app/Contents/MacOS/Spotify
+</span><span>3. Change the &quot;maxprot&quot; of the &quot;__TEXT&quot; section to RXW so that we can monkey-patch the binary in the tracer library.
+</span><span>    (Read the automatic hook resolution post for why we need to write code at runtime).
+</span></code></pre>
+<p>As a test, we can prepare a tarball of a directory with <code>/Contents/MacOS/Spotify</code> contents and write a small test program like so:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>NSTask * task = [[NSTask alloc] init];
+</span><span>
+</span><span>task.launchPath = @&quot;/usr/bin/tar&quot;;
+</span><span>task.arguments = @[@&quot;xf&quot;, TARBALL];
+</span><span>task.currentDirectoryPath = UPDATE_DIR;
+</span><span>
+</span><span>[task launch];
+</span><span>[task waitUntilExit];
+</span></code></pre>
+<p>Then we can run <code>otool -L Spotify.app/Contents/MacOS/Spotify</code> and see that the appropriate libraries were reinjected:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>Spotify.app/Contents/MacOS/Spotify:
+</span><span>    ...
+</span><span>	/Users/samlerner/Projects/SPSkip/MacOS/LibSkipMac/spskip_tracer.dylib (compatibility version 0.0.0, current version 0.0.0)
+</span><span>	/Users/samlerner/Projects/SPSkip/MacOS/reinjector/spskip_reinjector.dylib (compatibility version 0.0.0, current version 0.0.0)
+</span></code></pre>
+<p>And we can run <code>objdump --private-headers Spotify.app/Contents/MacOS/Spotify</code> to see that <code>__TEXT.maxprot</code> has been appropriately set:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>Load command 1
+</span><span>      cmd LC_SEGMENT_64
+</span><span>  cmdsize 1112
+</span><span>  segname __TEXT
+</span><span>   vmaddr 0x0000000100000000
+</span><span>   vmsize 0x0000000001af8000
+</span><span>  fileoff 0
+</span><span> filesize 28278784
+</span><span>  maxprot rwx
+</span><span> initprot r-x
+</span><span>   nsects 13
+</span><span>    flags (none)
+</span></code></pre>
+<h2 id="conclusion">Conclusion</h2>
+<p>Well that's a wrap. I hope you you learned something that you might be able to take away to other reversing tasks. You might also learn something about Mach-O parsing and/or the Objective-C runtime if you take a look at the <a href="https://github.com/SamL98/SPSkip/tree/master/MacOS/reinjector">code</a>.</p>
+<p>Let me know if you have any comments on <a href="https://twitter.com/samnlerner">twitter</a> or email.</p>
+
+        </section>
+
+        
+
+    </article>
+</main>
+
+
+    </div>
+</body>
+
+</html>
